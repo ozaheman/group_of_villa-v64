@@ -1,0 +1,134 @@
+//--- START OF FILE js/ui.js ---
+
+import { App } from './appState.js';
+import { polygonArea } from './utils.js';
+import { destroyVertexHandles, createVertexHandles } from './polygon.js';
+import { cleanupTempObjects } from './canvas.js';
+import { updateGreenAreaCalculations } from './greenArea.js';
+
+export function setMode(newMode) {
+    if (App.state.mode === 'edit') destroyVertexHandles();
+    if (App.state.mode === newMode && newMode !== 'draw') newMode = 'none';
+    App.state.mode = newMode;
+
+    // Reset all button styles
+    document.querySelectorAll('.control-group button').forEach(b => {
+        if (!b.classList.contains('primary')) b.style.backgroundColor = '';
+    });
+
+    App.canvas.defaultCursor = 'default';
+    App.canvas.selection = false;
+    if (App.elements.finishDrawBtn) App.elements.finishDrawBtn.disabled = true;
+    if (App.elements.removeVertexBtn) App.elements.removeVertexBtn.disabled = true;
+    if (App.elements.drawRoadBtn) App.elements.drawRoadBtn.style.display = 'block';
+    if (App.elements.finishRoadBtn) App.elements.finishRoadBtn.style.display = 'none';
+
+    // Update button states based on canvas content
+    if (App.elements.startDrawBtn) App.elements.startDrawBtn.disabled = !!App.objects.masterPolygon;
+    if (App.elements.editPolyBtn) App.elements.editPolyBtn.disabled = !App.objects.activePolygon;
+    if (App.elements.generateCirclesBtn) App.elements.generateCirclesBtn.disabled = !App.objects.activePolygon;
+    if (App.elements.createGreenAreaBtn) App.elements.createGreenAreaBtn.disabled = !App.objects.activePolygon;
+    if (App.elements.genLayoutsBtn) App.elements.genLayoutsBtn.disabled = !App.objects.activePolygon;
+
+    // Enable/Disable Step Wizard
+    const hasPolygon = !!App.objects.activePolygon;
+    ['step-1', 'step-2', 'step-3', 'step-4', 'step-5', 'step-6', 'step-7', 'step-8', 'step-9', 'step-10', 'step-11', 'step-12'].forEach(id => {
+        const btn = document.getElementById(id);
+        if (btn) btn.disabled = !hasPolygon;
+    });
+
+    const tangentCirclesExist = App.data.generatedObjects.filter(o => o.isTangentCircle || o.isGeneratedPlot).length > 0;
+    if (App.elements.subdividePlotsBtn) App.elements.subdividePlotsBtn.disabled = !tangentCirclesExist;
+    if (App.elements.createHouseLotsBtn) App.elements.createHouseLotsBtn.disabled = !tangentCirclesExist;
+    if (App.elements.drawPlotLinesBtn) App.elements.drawPlotLinesBtn.disabled = !tangentCirclesExist;
+    if (App.elements.arrayCirclesBtn) App.elements.arrayCirclesBtn.disabled = !tangentCirclesExist;
+    if (App.elements.bufferRoadBtn) App.elements.bufferRoadBtn.disabled = !App.objects.roadCenterline;
+    if (App.elements.setInnerBoundaryBtn) App.elements.setInnerBoundaryBtn.disabled = !App.objects.lastInnerBoundary;
+
+    cleanupTempObjects();
+
+    // Activate the new mode
+    switch (App.state.mode) {
+        case 'draw':
+            App.elements.startDrawBtn.disabled = true;
+            App.elements.finishDrawBtn.disabled = false;
+            App.canvas.defaultCursor = 'crosshair';
+            if (App.objects.masterPolygon) {
+                App.canvas.remove(App.objects.masterPolygon);
+                App.objects.masterPolygon = null;
+                App.objects.activePolygon = null;
+            }
+            clearGeneratedLayout();
+            App.data.polyPoints = [];
+            break;
+        case 'roadDraw':
+            App.elements.drawRoadBtn.style.display = 'none';
+            App.elements.finishRoadBtn.style.display = 'block';
+            App.canvas.defaultCursor = 'crosshair';
+            App.data.roadCenterlinePoints = [];
+            if (App.objects.roadCenterline) {
+                App.data.generatedObjects = App.data.generatedObjects.filter(o => o !== App.objects.roadCenterline);
+                App.canvas.remove(App.objects.roadCenterline);
+                App.objects.roadCenterline = null;
+            }
+            break;
+        case 'edit':
+            App.elements.editPolyBtn.style.backgroundColor = '#28a745';
+            App.canvas.selection = true;
+            createVertexHandles();
+            break;
+        case 'measure':
+            App.elements.measureToolBtn.style.backgroundColor = '#28a745';
+            App.canvas.defaultCursor = 'copy';
+            App.data.measurePoints = [];
+            break;
+        case 'calibrate':
+            App.elements.calibrateBtn.style.backgroundColor = '#28a745';
+            App.canvas.defaultCursor = 'cell';
+            App.data.calibrationPoints = [];
+            break;
+        case 'entry':
+            App.elements.addEntryBtn.style.backgroundColor = '#28a745';
+            App.canvas.defaultCursor = 'pointer';
+            break;
+    }
+}
+
+export function updateAreaInfo() {
+    const totalSiteAreaM2 = App.objects.masterPolygon ? polygonArea(App.objects.masterPolygon.points) * App.state.scale * App.state.scale : 0;
+    App.elements.totalArea.textContent = `${totalSiteAreaM2.toFixed(2)} m²`;
+
+    const plots = App.data.generatedObjects.filter(o => o.isTangentCircle || o.isPlot);
+    const plotCount = plots.length;
+
+    let totalPlotAreaM2 = 0;
+    plots.forEach(p => {
+        if (p.isPlot) {
+            totalPlotAreaM2 += (p.area || 0);
+        } else if (p.isTangentCircle) {
+            const r = p.radius * App.state.scale;
+            totalPlotAreaM2 += Math.PI * r * r;
+        }
+    });
+
+    App.elements.plotAreaCalc.textContent = `${totalPlotAreaM2.toFixed(2)} m²`;
+    App.elements.plotCount.textContent = plotCount;
+
+    // Also update/reset the green area calculations
+    const greenPolygon = App.data.generatedObjects.find(obj => obj.isGreenArea);
+    updateGreenAreaCalculations(greenPolygon);
+}
+
+export function clearGeneratedLayout() {
+    App.data.generatedObjects.forEach(obj => App.canvas.remove(obj));
+    App.data.generatedObjects = [];
+    App.objects.roadCenterline = null;
+    App.objects.lastInnerBoundary = null;
+    if (App.objects.masterPolygon !== App.objects.activePolygon) {
+        App.canvas.remove(App.objects.activePolygon);
+    }
+    App.objects.activePolygon = App.objects.masterPolygon;
+    if (App.objects.masterPolygon) App.objects.masterPolygon.visible = true;
+    App.canvas.renderAll();
+    updateAreaInfo();
+}
