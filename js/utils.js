@@ -240,3 +240,73 @@ export function getSegmentIntersection(p1, p2, p3, p4) {
     }
     return null;
 }
+
+/**
+ * Clips a polygon against an infinite line defined by p1 and p2.
+ * @param {Array} polyPoints - Points of the polygon
+ * @param {Object} lineP1 - First point of the line
+ * @param {Object} lineP2 - Second point of the line
+ * @param {Number} side - Which side to keep (1 or -1)
+ */
+export function clipPolygon(polyPoints, lineP1, lineP2, side) {
+    const newPts = [];
+    const dx = lineP2.x - lineP1.x;
+    const dy = lineP2.y - lineP1.y;
+    const nx = -dy;
+    const ny = dx;
+
+    const isInside = (p) => {
+        const dot = (p.x - lineP1.x) * nx + (p.y - lineP1.y) * ny;
+        return (side * dot) >= 0;
+    };
+
+    for (let i = 0; i < polyPoints.length; i++) {
+        const curr = polyPoints[i];
+        const prev = polyPoints[(i - 1 + polyPoints.length) % polyPoints.length];
+
+        const currIn = isInside(curr);
+        const prevIn = isInside(prev);
+
+        if (currIn) {
+            if (!prevIn) {
+                const inter = getLineIntersection(prev, curr, lineP1, lineP2);
+                if (inter) newPts.push(inter);
+            }
+            newPts.push(curr);
+        } else if (prevIn) {
+            const inter = getLineIntersection(prev, curr, lineP1, lineP2);
+            if (inter) newPts.push(inter);
+        }
+    }
+    return newPts;
+}
+
+/**
+ * Splits a polygon by a segment with a gap.
+ * @param {Array} points - Polygon points
+ * @param {Object} p1 - Start of segment
+ * @param {Object} p2 - End of segment
+ * @param {Number} gap - Gap width
+ */
+export function splitPolygonGeneral(points, p1, p2, gap) {
+    const dx = p2.x - p1.x;
+    const dy = p2.y - p1.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-6) return [points, []];
+
+    const ux = dx / len;
+    const uy = dy / len;
+    const nx = -uy;
+    const ny = ux;
+
+    const halfGap = gap / 2;
+    const l1_p1 = { x: p1.x + nx * halfGap, y: p1.y + ny * halfGap };
+    const l1_p2 = { x: p2.x + nx * halfGap, y: p2.y + ny * halfGap };
+    const l2_p1 = { x: p1.x - nx * halfGap, y: p1.y - ny * halfGap };
+    const l2_p2 = { x: p2.x - nx * halfGap, y: p2.y - ny * halfGap };
+
+    const sub1 = clipPolygon(points, l1_p1, l1_p2, 1);
+    const sub2 = clipPolygon(points, l2_p1, l2_p2, -1);
+
+    return [sub1, sub2];
+}

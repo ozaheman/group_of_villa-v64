@@ -32,7 +32,7 @@ export function setMode(newMode) {
 
     // Enable/Disable Step Wizard
     const hasPolygon = !!App.objects.activePolygon;
-    ['step-1', 'step-2', 'step-3', 'step-4', 'step-5', 'step-6', 'step-7', 'step-8', 'step-9', 'step-10', 'step-11', 'step-12'].forEach(id => {
+    ['step-1', 'step-2', 'step-3', 'step-4', 'step-5', 'step-6', 'step-7', 'step-8', 'step-9', 'step-10', 'step-11', 'step-12', 'step-13', 'step-14'].forEach(id => {
         const btn = document.getElementById(id);
         if (btn) btn.disabled = !hasPolygon;
     });
@@ -114,9 +114,37 @@ export function updateAreaInfo() {
     App.elements.plotAreaCalc.textContent = `${totalPlotAreaM2.toFixed(2)} m²`;
     App.elements.plotCount.textContent = plotCount;
 
-    // Also update/reset the green area calculations
-    const greenPolygon = App.data.generatedObjects.find(obj => obj.isGreenArea);
-    updateGreenAreaCalculations(greenPolygon);
+    // Infrastructure Area
+    let infraAreaM2 = 0;
+    App.data.generatedObjects.filter(o => o.isInfra).forEach(o => {
+        if (o.type === 'polygon') {
+            infraAreaM2 += polygonArea(o.points) * App.state.scale * App.state.scale;
+        } else if (o.type === 'group' && o.getObjects().find(c => c.type === 'polygon')) {
+            // Groups might contain road polygons if complex
+        }
+    });
+    const infraEl = document.getElementById('infra-area-calc');
+    if (infraEl) infraEl.textContent = `${infraAreaM2.toFixed(2)} m²`;
+
+    // Green Area (Multiple polygons)
+    let totalGreenM2 = 0;
+    App.data.generatedObjects.filter(o => o.isGreenArea || o.isGreen).forEach(o => {
+        if (o.points) totalGreenM2 += polygonArea(o.points) * App.state.scale * App.state.scale;
+    });
+    const greenPercent = totalSiteAreaM2 > 0 ? (totalGreenM2 / totalSiteAreaM2) * 100 : 0;
+    const greenPercentEl = document.getElementById('green-area-percent');
+    if (greenPercentEl) greenPercentEl.textContent = `${greenPercent.toFixed(2)} %`;
+
+    // Amenities area (Multiple polygons)
+    let amenitiesAreaM2 = 0;
+    App.data.generatedObjects.filter(obj => obj.isAmenity).forEach(amenity => {
+        if (amenity.points) {
+            amenitiesAreaM2 += polygonArea(amenity.points) * App.state.scale * App.state.scale;
+        }
+    });
+    const amenitiesPercentage = totalSiteAreaM2 > 0 ? (amenitiesAreaM2 / totalSiteAreaM2) * 100 : 0;
+    const amenitiesPercentEl = document.getElementById('amenities-area-percent');
+    if (amenitiesPercentEl) amenitiesPercentEl.textContent = `${amenitiesPercentage.toFixed(2)} %`;
 }
 
 export function clearGeneratedLayout() {

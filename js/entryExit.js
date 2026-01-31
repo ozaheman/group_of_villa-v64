@@ -297,27 +297,62 @@ export function createExitRoadConnection() {
 
 /**
  * Create curved road path with specified turning radius
+ * Based on engineering standards for 20 km/h design speed
  */
 function createCurvedRoadPath(boundaryPoint, targetRoad, radius, type) {
-    // Simplified: Create a smooth curve using quadratic bezier
-    const roadCenter = {
-        x: targetRoad.left || 0,
-        y: targetRoad.top || 0
-    };
+    // Find nearest point on ring road to connect to
+    const ringRoadPoints = targetRoad.points || [];
+    if (ringRoadPoints.length < 3) {
+        // Fallback to simple line connection
+        const roadCenter = {
+            x: targetRoad.left || 0,
+            y: targetRoad.top || 0
+        };
+        const pathString = `M ${boundaryPoint.x} ${boundaryPoint.y} L ${roadCenter.x} ${roadCenter.y}`;
+        return new fabric.Path(pathString, {
+            stroke: type === 'entry' ? '#4CAF50' : '#f44336',
+            strokeWidth: 3,
+            fill: '',
+            selectable: false,
+            evented: false,
+            isEntryExitRoad: true,
+            roadType: type
+        });
+    }
 
-    // Calculate control point for smooth curve
-    const dx = roadCenter.x - boundaryPoint.x;
-    const dy = roadCenter.y - boundaryPoint.y;
+    // Find nearest point on ring road polyline
+    let nearestPt = null;
+    let minDist = Infinity;
+    for (let i = 0; i < ringRoadPoints.length; i++) {
+        const p1 = ringRoadPoints[i];
+        const p2 = ringRoadPoints[(i + 1) % ringRoadPoints.length];
+        const closest = closestPointOnSegment(boundaryPoint, p1, p2);
+        const dist = Math.hypot(closest.x - boundaryPoint.x, closest.y - boundaryPoint.y);
+        if (dist < minDist) {
+            minDist = dist;
+            nearestPt = closest;
+        }
+    }
+
+    if (!nearestPt) nearestPt = ringRoadPoints[0];
+
+    const dx = nearestPt.x - boundaryPoint.x;
+    const dy = nearestPt.y - boundaryPoint.y;
     const dist = Math.hypot(dx, dy);
 
-    // Control point is offset perpendicular to the line
-    const controlPoint = {
-        x: boundaryPoint.x + dx * 0.5 + dy * 0.3,
-        y: boundaryPoint.y + dy * 0.5 - dx * 0.3
+    // Create smooth curve with proper turning radius
+    // Use cubic bezier for better control over curvature
+    const t = Math.min(dist * 0.4, radius);
+    const controlPoint1 = {
+        x: boundaryPoint.x + (dx * 0.3) - (dy * 0.15),
+        y: boundaryPoint.y + (dy * 0.3) + (dx * 0.15)
+    };
+    const controlPoint2 = {
+        x: nearestPt.x - (dx * 0.3) - (dy * 0.15),
+        y: nearestPt.y - (dy * 0.3) + (dx * 0.15)
     };
 
-    // Create path with curve
-    const pathString = `M ${boundaryPoint.x} ${boundaryPoint.y} Q ${controlPoint.x} ${controlPoint.y} ${roadCenter.x} ${roadCenter.y}`;
+    const pathString = `M ${boundaryPoint.x} ${boundaryPoint.y} C ${controlPoint1.x} ${controlPoint1.y}, ${controlPoint2.x} ${controlPoint2.y}, ${nearestPt.x} ${nearestPt.y}`;
 
     const path = new fabric.Path(pathString, {
         stroke: type === 'entry' ? '#4CAF50' : '#f44336',
@@ -326,7 +361,9 @@ function createCurvedRoadPath(boundaryPoint, targetRoad, radius, type) {
         selectable: false,
         evented: false,
         isEntryExitRoad: true,
-        roadType: type
+        roadType: type,
+        startPoint: boundaryPoint,
+        endPoint: nearestPt
     });
 
     return path;

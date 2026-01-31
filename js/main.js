@@ -24,6 +24,7 @@ import {
 } from './prototype.js';
 import { activateEntryMode, activateExitMode, handleEntryExitClick } from './entryExit.js';
 import { enableRoadCenterlineEdit, enableGreenAreaEdit, finishGeometryEdit } from './editGeometry.js';
+import { initMarketSearch } from './marketData.js';
 
 
 // --- INITIALIZATION ---
@@ -149,6 +150,10 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('step-10')?.addEventListener('click', () => runWizardStep(10));
     document.getElementById('step-11')?.addEventListener('click', () => runWizardStep(11));
     document.getElementById('step-12')?.addEventListener('click', () => runWizardStep(12));
+    document.getElementById('step-13')?.addEventListener('click', () => runWizardStep(13));
+    document.getElementById('step-14')?.addEventListener('click', () => runWizardStep(14));
+    document.getElementById('step-15')?.addEventListener('click', () => runWizardStep(15));
+    document.getElementById('step-16')?.addEventListener('click', () => runWizardStep(16));
     document.getElementById('step-finalize')?.addEventListener('click', () => runWizardStep(8)); // Redirect finalize to original Step 8 logic
 
     // Range slider value display
@@ -305,8 +310,61 @@ document.addEventListener('DOMContentLoaded', () => {
     plotProtoDropdown?.addEventListener('change', updateProtoPanelVisibility);
     updateProtoPanelVisibility();
 
+    // DXF & Labels
+    document.getElementById('export-dxf-btn')?.addEventListener('click', () => {
+        import('./dxfExport.js').then(m => m.exportToDXF(App.data.generatedObjects));
+    });
+
+    document.getElementById('toggle-labels')?.addEventListener('change', (e) => {
+        const show = e.target.checked;
+        App.canvas.getObjects().forEach(obj => {
+            if (obj.isPlot && obj.type === 'group') {
+                const textObj = obj.getObjects().find(o => o.type === 'text');
+                if (textObj) textObj.visible = show;
+                obj.dirty = true;
+            }
+        });
+        App.canvas.requestRenderAll();
+    });
+
+    // Save/Load Project
+    document.getElementById('save-project-zip')?.addEventListener('click', () => {
+        import('./io.js').then(m => m.saveProjectToZip());
+    });
+
+    document.getElementById('zip-loader')?.addEventListener('change', (e) => {
+        import('./io.js').then(m => m.loadProjectFromZip(e));
+    });
+
+    // Manual Road Tools
+    document.getElementById('manual-fillet-btn')?.addEventListener('click', () => import('./manualRoad.js').then(m => m.filletRoadCenterline()));
+    document.getElementById('manual-gen-road-btn')?.addEventListener('click', () => import('./manualRoad.js').then(m => m.generateRoadPolygon()));
+    document.getElementById('manual-gen-pave-btn')?.addEventListener('click', () => import('./manualRoad.js').then(m => m.generatePavementPolygon()));
+    document.getElementById('manual-connect-btn')?.addEventListener('click', () => import('./manualRoad.js').then(m => m.connectEntryExit()));
+    document.getElementById('manual-green-btn')?.addEventListener('click', () => import('./manualRoad.js').then(m => m.drawGreenManual()));
+    document.getElementById('manual-green-balance-btn')?.addEventListener('click', () => import('./manualRoad.js').then(m => m.generateGreenAreaBalanceManual()));
+    document.getElementById('manual-gen-plots-btn')?.addEventListener('click', () => import('./manualRoad.js').then(m => m.generatePlotsManual()));
+    document.getElementById('manual-gen-plots-outer-btn')?.addEventListener('click', () => import('./manualRoad.js').then(m => m.generatePlotsOuter()));
+    document.getElementById('manual-bifurcate-btn')?.addEventListener('click', () => import('./manualRoad.js').then(m => m.bifurcateRoadManual()));
+    document.getElementById('manual-recalc-btn')?.addEventListener('click', () => import('./manualRoad.js').then(m => m.recalculateAreaManual()));
+    document.getElementById('restart-btn')?.addEventListener('click', () => import('./manualRoad.js').then(m => m.restartDesign()));
+    document.getElementById('delete-selected-btn')?.addEventListener('click', () => import('./manualRoad.js').then(m => m.deleteSelectedPolygon()));
+    document.getElementById('edit-road-centerline')?.addEventListener('click', () => import('./manualRoad.js').then(m => m.editRoadCenterline()));
+    document.getElementById('edit-green-area')?.addEventListener('click', () => import('./manualRoad.js').then(m => m.editGreenArea()));
+
+    // Infra-only view toggle
+    document.getElementById('infra-only-view')?.addEventListener('change', () => {
+        import('./generative.js').then(m => {
+            if (m.GenerativeState.currentSolutionIndex !== -1) {
+                const currentSol = m.GenerativeState.solutions[m.GenerativeState.currentSolutionIndex];
+                if (currentSol) m.renderSolution(currentSol);
+            }
+        });
+    });
+
     // Initialize UI state
     setMode('none');
     updateAreaInfo();
     updateMixUI();
+    initMarketSearch();
 });

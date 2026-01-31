@@ -45,13 +45,15 @@ export function generateReportData() {
     const roads = App.data.generatedObjects.filter(o => o.isInfra || (o.fill && o.fill.includes('#444')));
     const pavements = App.data.generatedObjects.filter(o => o.fill && o.fill.includes('#ccc'));
     const greenSpaces = App.data.generatedObjects.filter(o => o.isGreen || o.isGreenArea);
+    const amenitySpaces = App.data.generatedObjects.filter(o => o.isAmenity);
     const parkingSpaces = App.data.generatedObjects.filter(o => o.isParking);
 
-    let roadArea = 0, pavementArea = 0, greenArea = 0;
+    let roadArea = 0, pavementArea = 0, greenArea = 0, amenityArea = 0;
 
     roads.forEach(r => { if (r.points) roadArea += polygonArea(r.points) * scale * scale; });
     pavements.forEach(p => { if (p.points) pavementArea += polygonArea(p.points) * scale * scale; });
     greenSpaces.forEach(g => { if (g.points) greenArea += polygonArea(g.points) * scale * scale; });
+    amenitySpaces.forEach(a => { if (a.points) amenityArea += polygonArea(a.points) * scale * scale; });
 
     // Urban planning metrics
     const plotCoverage = (totalPlotArea / totalSiteAreaM2) * 100;
@@ -108,7 +110,15 @@ export function generateReportData() {
         // Green Space
         green: {
             area: greenArea,
-            percentage: greenPercentage
+            percentage: greenPercentage,
+            target: parseFloat(document.getElementById('green-area')?.value || 0)
+        },
+
+        // Amenities
+        amenities: {
+            area: amenityArea,
+            percentage: (amenityArea / totalSiteAreaM2) * 100,
+            target: parseFloat(document.getElementById('amenities-area')?.value || 0)
         },
 
         // Parking
@@ -282,7 +292,7 @@ export function exportExcel() {
 /**
  * Generate and download PDF report
  */
-export function exportPDF() {
+export function printReport() {
     const data = generateReportData();
     if (!data) return;
 
@@ -463,10 +473,11 @@ export function showReportPanel() {
         </div>
 
         <div class="report-section">
-            <h4>Urban Metrics</h4>
+            <h4>Planning Targets Compliance</h4>
+            <div class="report-item"><span style="color: #4CAF50;">Green Space:</span><b style="color: #4CAF50;">Achieved ${data.green.percentage.toFixed(1)}% (Target ${data.green.target}%)</b></div>
+            <div class="report-item"><span style="color: #FF9800;">Amenities:</span><b style="color: #FF9800;">Achieved ${data.amenities.percentage.toFixed(1)}% (Target ${data.amenities.target}%)</b></div>
+            <div class="report-item"><span>Infrastructure Area:</span><b>${data.infrastructure.totalInfra.toFixed(0)} m² (${data.infrastructure.percentage.toFixed(1)}%)</b></div>
             <div class="report-item"><span>FAR:</span><b>${data.metrics.far.toFixed(2)}</b></div>
-            <div class="report-item"><span>Green Space:</span><b>${data.green.percentage.toFixed(1)}%</b></div>
-            <div class="report-item"><span>Infrastructure:</span><b>${data.infrastructure.percentage.toFixed(1)}%</b></div>
         </div>
 
         <div class="report-section">
@@ -540,7 +551,7 @@ export function generateDetailedPlotReport() {
                 <th>Frontage (m)</th>
                 <th>Depth (m)</th>
                 <th>Estimated Built-up (m²)</th>
-                <th>Parking Req.</th>
+                <th>Est. Price (AED)</th>
             </tr>
         </thead>
         <tbody>`;
@@ -560,6 +571,12 @@ export function generateDetailedPlotReport() {
             depth = Math.hypot(p3.x - p2.x, p3.y - p2.y) * App.state.scale;
         }
 
+        // Calculate Price
+        const pricePerSqFt = parseFloat(document.getElementById('price-per-sqft')?.value || 350);
+        const areaSqFt = plotArea * 10.7639;
+        const estimatedPrice = areaSqFt * pricePerSqFt;
+        const priceFormatted = estimatedPrice.toLocaleString('en-US', { style: 'currency', currency: 'AED', maximumFractionDigits: 0 });
+
         html += `
             <tr>
                 <td>${index + 1}</td>
@@ -569,7 +586,7 @@ export function generateDetailedPlotReport() {
                 <td>${frontage.toFixed(2)}</td>
                 <td>${depth.toFixed(2)}</td>
                 <td>${builtUp.toFixed(2)}</td>
-                <td>${parkingReq}</td>
+                <td>${priceFormatted}</td>
             </tr>`;
     });
 
@@ -592,6 +609,12 @@ export function generateDetailedPlotReport() {
             depth = Math.hypot(p3.x - p2.x, p3.y - p2.y) * App.state.scale;
         }
 
+        // Calculate Price
+        const pricePerSqFt = parseFloat(document.getElementById('price-per-sqft')?.value || 350);
+        const areaSqFt = plotArea * 10.7639;
+        const estimatedPrice = areaSqFt * pricePerSqFt;
+        const priceFormatted = estimatedPrice.toLocaleString('en-US', { style: 'currency', currency: 'AED', maximumFractionDigits: 0 });
+
         html += `
     <div class="plot-card">
         <div class="plot-header">
@@ -601,6 +624,10 @@ export function generateDetailedPlotReport() {
             <div class="plot-detail-item">
                 <div class="plot-detail-label">Plot Area:</div>
                 <div>${plotArea.toFixed(2)} m²</div>
+            </div>
+            <div class="plot-detail-item">
+                <div class="plot-detail-label">Est. Price:</div>
+                <div style="color: #2e7d32; font-weight: bold;">${priceFormatted}</div>
             </div>
             <div class="plot-detail-item">
                 <div class="plot-detail-label">Frontage:</div>
@@ -663,3 +690,53 @@ function downloadFile(content, filename, mimeType) {
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
 }
+
+export function exportPDF() {
+    if (!window.jspdf) return alert("jsPDF library not loaded.");
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+
+    // Header
+    doc.setFontSize(18);
+    doc.text("Project Report - Master Plan", 14, 20);
+    doc.setFontSize(10);
+    doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 28);
+
+    // Data Summary
+    const report = generateReportData();
+    if (!report) return;
+
+    doc.setFontSize(11);
+    doc.text(`Total Area: ${report.site.totalArea.toFixed(2)} m2`, 14, 40);
+    doc.text(`Plots: ${report.plots.total}`, 14, 46);
+    doc.text(`Coverage: ${report.builtup.groundCoverage.toFixed(2)}%`, 14, 52);
+    // doc.text(`Estimated Infra Cost: AED ${report.cost.totalInfra.toFixed(0)}`, 14, 58);
+
+    // Canvas Image
+    if (App.canvas) {
+        try {
+            // Need to clear selection before snapshot?
+            App.canvas.discardActiveObject();
+            App.canvas.renderAll();
+
+            const canvasImg = App.canvas.toDataURL({ format: 'png', multiplier: 1 });
+            const pageWidth = doc.internal.pageSize.getWidth();
+            const pageHeight = doc.internal.pageSize.getHeight();
+            const imgProps = doc.getImageProperties(canvasImg);
+            const imgHeight = (imgProps.height * (pageWidth - 28)) / imgProps.width;
+
+            // Allow for image page break
+            let y = 65;
+            if (y + imgHeight > pageHeight) {
+                doc.addPage();
+                y = 20;
+            }
+
+            doc.addImage(canvasImg, 'PNG', 14, y, pageWidth - 28, imgHeight);
+        } catch (e) { console.error("Canvas export error", e); }
+    }
+
+    doc.save('master_plan_report.pdf');
+}
+
+

@@ -87,7 +87,7 @@ export function initCanvas() {
     });
 
     canvas.on('selection:created', (e) => {
-        if (App.state.mode === 'edit' && e.target.isVertex) {
+        if (e.target && App.state.mode === 'edit' && e.target.isVertex) {
             App.elements.removeVertexBtn.disabled = App.objects.activePolygon.points.length <= 3;
         }
     });

@@ -11,16 +11,40 @@
     <script>
         pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.worker.min.js`;
     </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
     <!-- Your Stylesheet -->
     <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
+    <!-- Global Batch Progress Overlay -->
+    <div id="batch-progress-overlay" style="display: none;">
+        <div class="progress-container-global">
+            <h3 id="batch-progress-title">Generating Layouts...</h3>
+            <div class="progress-bar-global">
+                <div id="batch-progress-fill" class="progress-fill-global"></div>
+            </div>
+            <p id="batch-progress-status" style="font-size: 11px; margin-top: 5px; color: #666;">Step 0 of 0</p>
+        </div>
+    </div>
     <div id="controls">
         <div class="control-group">
-            <h3>1. Site Setup</h3>
-            <label for="bg-loader" class="button secondary">Load Background</label>
+            <h3>Project Management</h3>
+            <div style="display: flex; gap: 5px; margin-bottom: 8px;">
+                <button id="save-project-zip" class="primary" style="flex: 1; margin:0;">💾 Export ZIP</button>
+                <label for="zip-loader" class="button secondary"
+                    style="flex: 1; text-align: center; margin:0; cursor: pointer;">📂 Import ZIP</label>
+                <input type="file" id="zip-loader" style="display:none;" accept=".zip">
+            </div>
+            <label for="bg-loader" class="button success" style="width: 100%; text-align: center; cursor: pointer;">📄
+                Import Affection Plan (PDF/IMG)</label>
             <input type="file" id="bg-loader" style="display:none;" accept="image/jpeg, image/png, application/pdf">
+        </div>
+
+        <div class="control-group">
+            <h3>1. Site Setup</h3>
             <button id="calibrate-scale" class="secondary">Calibrate Scale</button>
             <div class="control-item"><span>Scale:</span><span id="scale-info" class="info-value">1px = 1.00m</span>
             </div>
@@ -67,8 +91,8 @@
                     value="2" min="1"></div>
             <div class="control-item"><label for="lane-width">Lane Width:</label> <input type="number" id="lane-width"
                     value="3.5"></div>
-            <div class="control-item"><label for="turning-radius">Turning Radius:</label> <input type="number"
-                    id="turning-radius" value="6" min="3" max="12" step="0.5"></div>
+            <div class="control-item"><label for="turning-radius">Turning Radius (m):</label> <input type="number"
+                    id="turning-radius" value="15" min="10" max="20" step="0.5"></div>
             <hr>
             <div class="control-item">
                 <button id="add-entry" class="secondary" style="width: 48%; display: inline-block;">📍 Add
@@ -108,6 +132,38 @@
             <div class="control-item">
                 <label>Plot Mix (Affordable/Mid/Luxury):</label>
                 <span id="mix-info" style="font-size:10px">25/45/30</span>
+            </div>
+            <hr>
+            <h4>Planning Method for Generative Design</h4>
+            <div class="control-item" style="flex-direction: column; align-items: flex-start;">
+                <label style="display: flex; align-items: center; margin: 3px 0;">
+                    <input type="checkbox" id="plan-grid" value="grid" style="width: auto; margin-right: 8px;">
+                    <span style="font-size: 11px;">Grid Layout (Orthogonal)</span>
+                </label>
+                <label style="display: flex; align-items: center; margin: 3px 0;">
+                    <input type="checkbox" id="plan-culdeSac" value="culdesac" style="width: auto; margin-right: 8px;">
+                    <span style="font-size: 11px;">Cul-de-Sac (Finger)</span>
+                </label>
+                <label style="display: flex; align-items: center; margin: 3px 0;">
+                    <input type="checkbox" id="plan-cluster" value="cluster" style="width: auto; margin-right: 8px;">
+                    <span style="font-size: 11px;">Cluster (Courtyard)</span>
+                </label>
+                <label style="display: flex; align-items: center; margin: 3px 0;">
+                    <input type="checkbox" id="plan-loop" value="loop" checked style="width: auto; margin-right: 8px;">
+                    <span style="font-size: 11px;">Loop Layout</span>
+                </label>
+                <label style="display: flex; align-items: center; margin: 3px 0;">
+                    <input type="checkbox" id="plan-linear" value="linear" style="width: auto; margin-right: 8px;">
+                    <span style="font-size: 11px;">Linear (Single-Loaded)</span>
+                </label>
+                <label style="display: flex; align-items: center; margin: 3px 0;">
+                    <input type="checkbox" id="plan-organic" value="organic" style="width: auto; margin-right: 8px;">
+                    <span style="font-size: 11px;">Organic (Contour)</span>
+                </label>
+                <label style="display: flex; align-items: center; margin: 3px 0;">
+                    <input type="checkbox" id="plan-radburn" value="radburn" style="width: auto; margin-right: 8px;">
+                    <span style="font-size: 11px;">Radburn (Pedestrian-Centric)</span>
+                </label>
             </div>
         </div>
 
@@ -190,7 +246,25 @@
             <h3>4. Actions & Tools</h3>
             <button id="draw-road" class="secondary">Draw Road Centerline</button>
             <button id="finish-road" class="success" style="display: none;">Finish Road Drawing</button>
-            <button id="measure-tool">Measure Tool</button>
+            <!-- Manual Road Tools -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 5px;">
+                <button id="manual-fillet-btn" class="secondary" style="font-size: 11px;">Fillet (R)</button>
+                <input type="number" id="manual-fillet-val" value="15" style="width: 100%;" placeholder="R">
+                <button id="manual-gen-road-btn" class="secondary" style="font-size: 11px;">Gen Road</button>
+                <button id="manual-gen-pave-btn" class="secondary" style="font-size: 11px;">Gen Pave</button>
+                <button id="manual-connect-btn" class="secondary" style="font-size: 11px;">Connect E/E</button>
+                <button id="manual-green-btn" class="secondary" style="font-size: 11px;">Draw Green</button>
+                <button id="manual-green-balance-btn" class="secondary" style="font-size: 11px;">Green Balance</button>
+                <button id="manual-gen-plots-btn" class="secondary" style="font-size: 11px;">Gen Plots (Inner)</button>
+                <button id="manual-gen-plots-outer-btn" class="secondary" style="font-size: 11px;">Gen Plots
+                    (Outer)</button>
+                <button id="manual-bifurcate-btn" class="secondary" style="font-size: 11px;">Bifurcate Road</button>
+                <button id="manual-recalc-btn" class="secondary" style="font-size: 11px;">Recalc All</button>
+            </div>
+            <button id="restart-btn" class="danger" style="margin-top: 5px; width: 100%;">Restart / Clear</button>
+            <button id="delete-selected-btn" class="danger" style="margin-top: 5px; width: 100%;">Delete Selected
+                Polygon</button>
+            <button id="measure-tool" style="margin-top: 5px;">Measure Tool</button>
             <hr>
             <button id="edit-road-centerline" class="secondary">✏️ Edit Road Centerline</button>
             <button id="edit-green-area" class="secondary">✏️ Edit Green Area</button>
@@ -203,7 +277,7 @@
                     <button id="step-1" class="secondary">1. Outer Plots</button>
                     <button id="step-2" class="secondary">2. Outer Pave</button>
                     <button id="step-3" class="secondary">3. Road Ring</button>
-                    <button id="step-4" class="secondary">4. Inner Pave</button>
+                    <button id="step-4" class="secondary">4. Fillet & Gen Rd</button>
                     <button id="step-5" class="secondary">5. Inner Plots</button>
                     <button id="step-6" class="secondary">6. Analyze</button>
                     <button id="step-7" class="secondary">7. Bifurcate</button>
@@ -212,17 +286,68 @@
                     <button id="step-10" class="secondary">10. Green Check</button>
                     <button id="step-11" class="secondary">11. Side A</button>
                     <button id="step-12" class="secondary">12. Side B</button>
+                    <button id="step-13" class="secondary">13. Entry Rd</button>
+                    <button id="step-14" class="secondary">14. Exit Rd</button>
+                    <button id="step-15" class="secondary">15. Project Report</button>
+                    <button id="step-16" class="secondary">16. Detail Report</button>
                 </div>
                 <button id="step-finalize" class="primary" style="width: 100%; margin-top: 8px;">Finalize Grid
                     Analysis</button>
+                <button id="export-dxf-btn" class="secondary" style="width: 100%; margin-top: 8px;">💾 Export DXF
+                    (CAD)</button>
             </div>
             <hr>
+            <div style="margin-bottom: 8px;">
+                <label><input type="checkbox" id="toggle-labels" checked> Show Plot Labels</label>
+            </div>
             <button id="reset-view" class="secondary">Reset View</button>
             <button id="clear-canvas" class="danger">Clear All</button>
         </div>
 
+        <div class="control-group">
+            <h3>5. Market Analysis (UAE)</h3>
+            <div class="control-item">
+                <label for="search-area">Search Area/City:</label>
+                <input type="text" id="search-area" value="Dubai Hills Estate" placeholder="e.g. Dubai Hills"
+                    list="dubai-locations-list">
+                <datalist id="dubai-locations-list"></datalist>
+            </div>
+            <button id="search-prices-btn" class="secondary" style="margin-bottom: 10px; width: 100%;">🔍 Search
+                Listings (Bayut/PF)</button>
+            <div class="control-item">
+                <label for="price-per-sqft">Price (AED/sq.ft):</label>
+                <input type="number" id="price-per-sqft" value="350" min="0" step="10">
+            </div>
+        </div>
+
         <div class="control-group" id="solutions-panel" style="display:none;">
             <h3>5. Generative Solutions</h3>
+            <div class="control-item">
+                <label style="display: flex; align-items: center; margin: 5px 0; cursor: pointer;">
+                    <input type="checkbox" id="infra-only-view" style="width: auto; margin-right: 8px;">
+                    <span style="font-size: 11px; font-weight: bold;">Preview Road Network Only</span>
+                </label>
+            </div>
+            <div id="infra-metrics" style="font-size: 10px; color: #666; margin-bottom: 5px; display: none;">
+                Road Length: <span id="infra-length">0</span>m | Area: <span id="infra-area">0</span>m²
+            </div>
+
+            <!-- Land Use Legend -->
+            <div class="legend-group">
+                <div class="legend-item">
+                    <div class="legend-color" style="background:#2196F3;"></div>Plots
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background:#4CAF50;"></div>Green
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background:#FFC107;"></div>Amenity
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background:#9E9E9E;"></div>Roads
+                </div>
+            </div>
+
             <div id="solutions-gallery" class="gallery"></div>
         </div>
 
@@ -237,6 +362,11 @@
             </div>
             <div class="control-item"><span>Green Area %:</span><span id="green-area-percent" class="info-value">0.00
                     %</span></div>
+            <div class="control-item"><span>Amenities Area %:</span><span id="amenities-area-percent"
+                    class="info-value">0.00
+                    %</span></div>
+            <div class="control-item"><span>Infrastructure Area:</span><span id="infra-area-calc"
+                    class="info-value">0.00 m²</span></div>
         </div>
 
         <div class="control-group" id="report-panel" style="display:none;">
