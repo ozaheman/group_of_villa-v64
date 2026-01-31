@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced Master Plan Tool</title>
+    <!-- External Libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.min.js"></script>
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.worker.min.js`;
+    </script>
+    <!-- Your Stylesheet -->
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div id="controls">
+        <div class="control-group">
+            <h3>1. Site Setup</h3>
+            <label for="bg-loader" class="button secondary">Load Background</label>
+            <input type="file" id="bg-loader" style="display:none;" accept="image/jpeg, image/png, application/pdf">
+            <button id="calibrate-scale" class="secondary">Calibrate Scale</button>
+            <div class="control-item"><span>Scale:</span><span id="scale-info" class="info-value">1px = 1.00m</span>
+            </div>
+            <div class="control-item"><label for="gfa">Total GFA (m²):</label> <input type="number" id="gfa"
+                    value="50000"></div>
+            <div class="control-item"><label for="load">Conn. Load (kW):</label> <input type="number" id="load"
+                    value="1500"></div>
+        </div>
+
+        <div class="control-group">
+            <h3>2. Master Polygon</h3>
+            <button id="start-draw">Start Drawing</button>
+            <button id="finish-draw" class="secondary" disabled>Finish Drawing</button>
+            <button id="edit-poly" class="secondary" disabled>Edit Polygon</button>
+            <button id="remove-vertex" class="danger" disabled>Remove Selected Vertex</button>
+            <div class="control-item"><label for="ortho-mode">Ortho</label> <input type="checkbox" id="ortho-mode">
+            </div>
+            <div class="control-item"><label for="osnap-mode">OSNAP</label> <input type="checkbox" id="osnap-mode"
+                    checked></div>
+        </div>
+
+        <div class="control-group">
+            <h3>3. Layout Parameters (meters)</h3>
+            <div class="control-item"><label for="green-area">Green (%): <span
+                        id="green-area-val">20</span>%</label><input type="range" id="green-area" min="0" max="50"
+                    value="20"></div>
+            <div class="control-item"><label for="amenities-area">Amenities (%): <span
+                        id="amenities-area-val">10</span>%</label><input type="range" id="amenities-area" min="0"
+                    max="50" value="10"></div>
+            <div class="control-item"><label for="road-width">Road Width:</label> <input type="number" id="road-width"
+                    value="7" disabled></div>
+            <div class="control-item"><label for="pavement-width">Pavement:</label> <input type="number"
+                    id="pavement-width" value="5" disabled></div>
+            <div class="control-item"><label for="plot-depth">Plot Depth:</label> <input type="number" id="plot-depth"
+                    value="30"></div>
+            <div class="control-item"><label for="plot-width">Plot Width:</label> <input type="number" id="plot-width"
+                    value="15"></div>
+            <hr>
+            <div class="control-item"><label for="pavement-width-left">Left Pavement:</label> <input type="number"
+                    id="pavement-width-left" value="2.5"></div>
+            <div class="control-item"><label for="pavement-width-right">Right Pavement:</label> <input type="number"
+                    id="pavement-width-right" value="2.5"></div>
+            <div class="control-item"><label for="num-lanes">No. of Lanes:</label> <input type="number" id="num-lanes"
+                    value="2" min="1"></div>
+            <div class="control-item"><label for="lane-width">Lane Width:</label> <input type="number" id="lane-width"
+                    value="3.5"></div>
+            <div class="control-item"><label for="turning-radius">Turning Radius:</label> <input type="number"
+                    id="turning-radius" value="6" min="3" max="12" step="0.5"></div>
+            <hr>
+            <div class="control-item">
+                <button id="add-entry" class="secondary" style="width: 48%; display: inline-block;">📍 Add
+                    Entry</button>
+                <button id="add-exit" class="secondary" style="width: 48%; display: inline-block; margin-left: 2%;">🚪
+                    Add Exit</button>
+            </div>
+            <div class="control-item" style="font-size: 10px; color: #666;">
+                <span id="entry-exit-info">Entry: None | Exit: None</span>
+            </div>
+            <hr>
+            <h4>Urban Planning Standards</h4>
+            <div class="control-item"><label for="road-type">Road Type:</label>
+                <select id="road-type">
+                    <option value="local">Local Street (12-18m)</option>
+                    <option value="collector">Collector (20-30m)</option>
+                    <option value="access" selected>Access Lane (6-9m)</option>
+                </select>
+            </div>
+            <div class="control-item"><label for="density-type">Target Density:</label>
+                <select id="density-type">
+                    <option value="lowDensity">Low Density (300m²+)</option>
+                    <option value="mediumDensity" selected>Med. Density (150m²+)</option>
+                    <option value="highDensity">High Density (75m²+)</option>
+                </select>
+            </div>
+            <div class="control-item"><label for="plot-prototype">Building Type:</label>
+                <select id="plot-prototype">
+                    <option value="mixed" selected>Mixed Distribution</option>
+                    <option value="Compact">Compact Box</option>
+                    <option value="L-Shape">L-Shaped Villa</option>
+                    <option value="Courtyard">Courtyard Villa</option>
+                    <option value="U-Shape">U-Shaped Villa</option>
+                    <option value="Twin">Twin Unit</option>
+                </select>
+            </div>
+            <div class="control-item">
+                <label>Plot Mix (Affordable/Mid/Luxury):</label>
+                <span id="mix-info" style="font-size:10px">25/45/30</span>
+            </div>
+        </div>
+
+        <div class="control-group" id="prototype-panel">
+            <h3>3a. Building Prototypes</h3>
+            <div class="control-item">
+                <label for="override-mode">Manual Override:</label>
+                <input type="checkbox" id="override-mode">
+            </div>
+            <div class="control-item">
+                <label>Remaining:</label>
+                <span id="remaining-percentage" style="color: #ff9800; font-weight: bold;">100.0%</span>
+            </div>
+
+            <div style="display: flex; justify-content: space-between; align-items: center; margin: 10px 0 8px 0;">
+                <h4 style="font-size: 12px; margin: 0; color: #0056b3;">Villas</h4>
+                <button id="add-villa-proto" class="secondary"
+                    style="width: auto; padding: 2px 8px; margin: 0; font-size: 10px;">+ Add Villa</button>
+            </div>
+            <div id="villas-container" class="prototype-group">
+                <!-- Dynamic Content -->
+            </div>
+
+            <div style="display: flex; justify-content: space-between; align-items: center; margin: 15px 0 8px 0;">
+                <h4 style="font-size: 12px; margin: 0; color: #0056b3;">Townhouses</h4>
+                <button id="add-townhouse-proto" class="secondary"
+                    style="width: auto; padding: 2px 8px; margin: 0; font-size: 10px;">+ Add Townhouse</button>
+            </div>
+            <div id="townhouses-container" class="prototype-group">
+                <!-- Dynamic Content -->
+            </div>
+
+            <div style="margin-top: 10px;">
+                <button id="reset-prototypes" class="secondary" style="width: 31%; margin-right: 1%;">Reset</button>
+                <button id="normalize-mix" class="secondary" style="width: 31%; margin-right: 1%;">Normalize</button>
+                <button id="show-proto-stats" class="secondary" style="width: 31%;">Stats</button>
+            </div>
+            <div id="proto-stats" class="proto-stats-panel"
+                style="display:none; margin-top: 10px; padding: 10px; background-color: #f8f9fa; border-radius: 4px; font-size: 11px;">
+                <h4 style="margin-top: 0;">Prototype Statistics</h4>
+                <div id="proto-stats-content"></div>
+            </div>
+        </div>
+
+        <!-- Parking & Public Realm -->
+        <div class="control-group">
+            <div class="group-title">Parking & Visitor Control</div>
+
+            <div class="control-item">
+                <label for="show-parking" style="font-size: 11px;">Show Parking Boxes</label>
+                <input type="checkbox" id="show-parking" style="width: auto;">
+            </div>
+
+            <div class="control-item">
+                <label for="enable-parallel-parking" style="font-size: 11px;">Parallel Parking (Paver 3)</label>
+                <input type="checkbox" id="enable-parallel-parking" style="width: auto;">
+            </div>
+
+            <div class="control-item">
+                <label for="parking-interval" style="font-size: 11px;">Interval (m)</label>
+                <input type="number" id="parking-interval" value="15" min="5" step="5">
+            </div>
+
+            <hr style="margin: 8px 0; opacity: 0.3;">
+
+            <div class="control-item" style="flex-direction: column; align-items: flex-start;">
+                <div style="display: flex; justify-content: space-between; width: 100%; align-items: center;">
+                    <label style="font-size: 11px;">Visitor Parking Goal</label>
+                    <span id="visitor-parking-val" style="font-size: 11px; font-weight: bold; color: #0056b3;">0</span>
+                </div>
+                <div style="display: flex; gap: 8px; width: 100%; align-items: center;">
+                    <input type="range" id="visitor-parking-slider" min="0" max="100" value="0" disabled
+                        style="flex: 1;">
+                    <input type="checkbox" id="visitor-manual-override" title="Manual Override" style="width: auto;">
+                </div>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <h3>4. Actions & Tools</h3>
+            <button id="draw-road" class="secondary">Draw Road Centerline</button>
+            <button id="finish-road" class="success" style="display: none;">Finish Road Drawing</button>
+            <button id="measure-tool">Measure Tool</button>
+            <hr>
+            <button id="edit-road-centerline" class="secondary">✏️ Edit Road Centerline</button>
+            <button id="edit-green-area" class="secondary">✏️ Edit Green Area</button>
+            <hr>
+            <button id="gen-layouts" class="success primary" disabled>Generate Layout Solutions</button>
+            <hr>
+            <div id="step-wizard">
+                <h4>Step-by-Step Wizard</h4>
+                <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px;">
+                    <button id="step-1" class="secondary">1. Outer Plots</button>
+                    <button id="step-2" class="secondary">2. Outer Pave</button>
+                    <button id="step-3" class="secondary">3. Road Ring</button>
+                    <button id="step-4" class="secondary">4. Inner Pave</button>
+                    <button id="step-5" class="secondary">5. Inner Plots</button>
+                    <button id="step-6" class="secondary">6. Analyze</button>
+                    <button id="step-7" class="secondary">7. Bifurcate</button>
+                    <button id="step-8" class="secondary">8. Show Rd</button>
+                    <button id="step-9" class="secondary">9. Rd + Pave</button>
+                    <button id="step-10" class="secondary">10. Green Check</button>
+                    <button id="step-11" class="secondary">11. Side A</button>
+                    <button id="step-12" class="secondary">12. Side B</button>
+                </div>
+                <button id="step-finalize" class="primary" style="width: 100%; margin-top: 8px;">Finalize Grid
+                    Analysis</button>
+            </div>
+            <hr>
+            <button id="reset-view" class="secondary">Reset View</button>
+            <button id="clear-canvas" class="danger">Clear All</button>
+        </div>
+
+        <div class="control-group" id="solutions-panel" style="display:none;">
+            <h3>5. Generative Solutions</h3>
+            <div id="solutions-gallery" class="gallery"></div>
+        </div>
+
+        <div class="control-group" id="info-panel">
+            <h3>Calculated Areas</h3>
+            <div class="control-item"><span>Total Site Area:</span><span id="total-area" class="info-value">0.00
+                    m²</span></div>
+            <div class="control-item"><span>Plot Area:</span><span id="plot-area-calc" class="info-value">0.00
+                    m²</span>
+            </div>
+            <div class="control-item"><span>No. of Plots:</span><span id="plot-count" class="info-value">0</span>
+            </div>
+            <div class="control-item"><span>Green Area %:</span><span id="green-area-percent" class="info-value">0.00
+                    %</span></div>
+        </div>
+
+        <div class="control-group" id="report-panel" style="display:none;">
+            <h3>📊 Project Report</h3>
+            <div id="report-content" style="font-size: 11px; max-height: 400px; overflow-y: auto;">
+                <!-- Report content will be dynamically generated -->
+            </div>
+            <hr style="margin: 10px 0;">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px;">
+                <button id="export-pdf" class="primary" style="font-size: 11px;">📄 Export PDF</button>
+                <button id="export-csv" class="secondary" style="font-size: 11px;">📊 Export CSV</button>
+                <button id="export-excel" class="secondary" style="font-size: 11px;">📈 Export Excel</button>
+                <button id="show-report" class="success" style="font-size: 11px;">🔄 Refresh</button>
+            </div>
+            <button id="detailed-plot-report" class="primary" style="width: 100%; margin-top: 8px; font-size: 11px;">📋
+                Plot Details Report</button>
+        </div>
+    </div>
+
+    <div id="canvas-container"><canvas id="c" width="1000" height="800"></canvas></div>
+
+    <script src="js/main.js" type="module"></script>
+</body>
+
+</html>
