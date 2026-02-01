@@ -1,6 +1,7 @@
 
 import { App } from './appState.js';
 import { generateReportData } from './reporting.js';
+import { setMode, updateAreaInfo, clearGeneratedLayout } from './ui.js';
 import { clearCanvas } from './canvas.js';
 
 export function handleBackgroundLoad(e) {
@@ -16,35 +17,124 @@ export function handleBackgroundLoad(e) {
     }
 }
 
-function setBackground(url) {
-    fabric.Image.fromURL(url, (img) => {
-        App.canvas.setBackgroundImage(img, App.canvas.renderAll.bind(App.canvas), {
-            scaleX: App.canvas.width / img.width,
-            scaleY: App.canvas.height / img.height,
+export function setBackground(source) {
+    if (!source) return;
+
+    const applyToCanvas = (img) => {
+        const canvasW = App.canvas.width;
+        const canvasH = App.canvas.height;
+        const imgW = img.width;
+        const imgH = img.height;
+
+        const scale = Math.min(canvasW / imgW, canvasH / imgH);
+
+        const left = (canvasW - imgW * scale) / 2;
+        const top = (canvasH - imgH * scale) / 2;
+
+        console.log(`[IO] Applying background to canvas. Scale: ${scale.toFixed(4)}, Pos: (${left.toFixed(0)}, ${top.toFixed(0)})`);
+
+        App.canvas.setBackgroundImage(img, () => {
+            App.canvas.renderAll();
+            console.log("[IO] Background image applied and refreshed.");
+        }, {
+            scaleX: scale,
+            scaleY: scale,
+            left: left,
+            top: top,
+            originX: 'left',
+            originY: 'top',
             selectable: false,
             evented: false,
+            // Ensure background image is always behind objects
+            erasable: false
         });
-    });
+    };
+
+    if (typeof source === 'string') {
+        console.log("[IO] Loading background from string source...");
+        fabric.Image.fromURL(source, (img) => {
+            if (img) {
+                console.log("[IO] Image element created from string source.");
+                applyToCanvas(img);
+            } else {
+                console.error("[IO] Failed to create Image element from string source.");
+            }
+        }, { crossOrigin: 'anonymous' });
+    } else {
+        console.log("[IO] Loading background from element source...");
+        const img = new fabric.Image(source);
+        applyToCanvas(img);
+    }
 }
 
 async function loadPdfAsBackground(file) {
     const fileReader = new FileReader();
     fileReader.onload = async function () {
         try {
+            console.log("[IO] PDF file read started...");
             const typedarray = new Uint8Array(this.result);
-            // Use window.pdfjsLib to access the globally loaded library
-            const pdf = await window.pdfjsLib.getDocument(typedarray).promise;
+
+            // Initialization
+            const pdfjsLib = window.pdfjsLib;
+            if (!pdfjsLib) throw new Error("PDF.js library not found on window.");
+
+            const loadingTask = pdfjsLib.getDocument({
+                data: typedarray,
+                disableFontFace: true, // Prevent browser font errors for malformed PDF fonts
+                cMapPacked: true,       // Better support for CJK/complex character maps
+                verbosity: 1
+            });
+
+            const pdf = await loadingTask.promise;
+            console.log(`[IO] PDF loaded. Pages: ${pdf.numPages}`);
+
             const page = await pdf.getPage(1);
-            const viewport = page.getViewport({ scale: 2.0 });
+            let viewport = page.getViewport({ scale: 2.0 }); // High res initial
+
+            // Safety cap: ensure canvas doesn't exceed browser limits (approx 4000px for stability)
+            const MAX_DIMENSION = 4000;
+            if (viewport.width > MAX_DIMENSION || viewport.height > MAX_DIMENSION) {
+                const scale = MAX_DIMENSION / Math.max(viewport.width / 2.0, viewport.height / 2.0);
+                viewport = page.getViewport({ scale: scale });
+                console.log(`[IO] Scaling down PDF to ${viewport.width}x${viewport.height} to fit limits.`);
+            }
+
             const tempCanvas = document.createElement('canvas');
+            const context = tempCanvas.getContext('2d');
             tempCanvas.height = viewport.height;
             tempCanvas.width = viewport.width;
-            const tempContext = tempCanvas.getContext('2d');
-            await page.render({ canvasContext: tempContext, viewport: viewport }).promise;
-            setBackground(tempCanvas.toDataURL());
+
+            // Ensure background is opaque
+            context.fillStyle = 'white';
+            context.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
+
+            console.log(`[IO] Rendering page 1 at ${tempCanvas.width}x${tempCanvas.height}`);
+
+            const renderTask = page.render({
+                canvasContext: context,
+                viewport: viewport
+            });
+
+            await renderTask.promise;
+            console.log("[IO] PDF Page rendered to temp canvas.");
+
+            // Verification
+            if (tempCanvas.width === 0 || tempCanvas.height === 0) {
+                throw new Error("Rendered canvas has 0 dimensions.");
+            }
+
+            // Convert to DataURL for maximum compatibility with the setBackground logic
+            const dataUrl = tempCanvas.toDataURL('image/png');
+            console.log(`[IO] PDF DataURL generated. Length: ${dataUrl.length}`);
+            setBackground(dataUrl);
+
+            // Force a few renders to be sure
+            setTimeout(() => App.canvas.renderAll(), 100);
+            setTimeout(() => App.canvas.renderAll(), 500);
+
         } catch (error) {
-            console.error("Error loading PDF:", error);
-            alert("Failed to load or render the PDF file. Please check the console for details.");
+            console.error("[IO] Error loading PDF:", error);
+            alert("Failed to load or render the PDF file. Check the console. Error: " + error.message);
         }
     };
     fileReader.readAsArrayBuffer(file);

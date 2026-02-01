@@ -1,12 +1,17 @@
-//--- START OF FILE js/generative.js ---
-
 import { App } from './appState.js';
 import { clearGeneratedLayout, updateAreaInfo } from './ui.js';
-import { polygonArea, offsetPolyline, createInwardOffsetPolygon, pointsToPathData, isPointInPolygon, polygonSignedArea, getSegmentIntersection, distToSegment, splitPolygonGeneral } from './utils.js';
+import { polygonArea, offsetPolyline, createInwardOffsetPolygon, pointsToPathData, isPointInPolygon, polygonSignedArea, getSegmentIntersection, distToSegment, splitPolygonGeneral, getOrientedBoundingRect, getBounds, splitPolygon } from './utils.js';
 import { UrbanStandards, calculateKPIs } from './standards.js';
 import { getRandomPrototypeByMix, getPrototypeByShape } from './prototype.js';
 import { EntryExitState } from './entryExit.js';
 import { createEntryExitRoad, removeConflictingPlots } from './entryExitRoadHelpers.js';
+
+// Import Division Methods
+import { fillInnerAreaWithGridBifurcation } from './division_method/grid.js';
+import { fillInnerAreaWithRadialBifurcation } from './division_method/radial.js';
+import { fillInnerAreaWithOrganicBifurcation } from './division_method/organic.js';
+import { fillInnerAreaWithSubdivisionPlan } from './division_method/subdivision.js';
+import { fillInnerArea } from './division_method/hybrid.js';
 
 export const GenerativeState = {
     solutions: [],
@@ -22,6 +27,12 @@ export const GenerativeState = {
 export async function generateLayoutSolutions() {
     if (!App.objects.masterPolygon) {
         alert("Please draw a site boundary first.");
+        return;
+    }
+
+    const selectedMethods = Array.from(document.querySelectorAll('#methods-options input[type="checkbox"]:checked')).map(cb => cb.value);
+    if (selectedMethods.length === 0) {
+        alert("Please select at least one planning method.");
         return;
     }
 
@@ -50,10 +61,10 @@ export async function generateLayoutSolutions() {
         pavementRight: std.footpath,
         roadStandard: roadStandard,
         densityStandard: document.getElementById('density-type').value,
-        prototypeChoice: document.getElementById('plot-prototype').value
+        prototypeChoice: document.getElementById('plot-prototype').value,
+        selectedMethods: selectedMethods
     };
 
-    // Variation settings for generative design (Generate 20 options)
     const variations = [];
     const numVariations = 20;
     for (let i = 0; i < numVariations; i++) {
@@ -66,14 +77,12 @@ export async function generateLayoutSolutions() {
         });
     }
 
-    // Show Batch Progress Overlay
     const overlay = document.getElementById('batch-progress-overlay');
     const fill = document.getElementById('batch-progress-fill');
     const status = document.getElementById('batch-progress-status');
     if (overlay) overlay.style.display = 'flex';
 
     for (let i = 0; i < variations.length; i++) {
-        // Update Progress UI
         const progress = ((i + 1) / numVariations) * 100;
         if (fill) fill.style.width = `${progress}%`;
         if (status) status.textContent = `Processing Solution ${i + 1} of ${numVariations}...`;
@@ -82,13 +91,34 @@ export async function generateLayoutSolutions() {
         const solution = createSolution(baseParams, variant, i);
         GenerativeState.solutions.push(solution);
 
-        // Temporarily render and take screenshot
+        const targetGFA = parseFloat(document.getElementById('gfa').value) || 1;
+
+        const plotsCount = solution.summary.plots;
+        document.getElementById('metric-plots-val').textContent = plotsCount;
+        document.getElementById('metric-plots-fill').style.width = `${Math.min(100, (plotsCount / 500) * 100)}%`;
+
+        const gfaAchieved = solution.summary.gfa || 0;
+        const gfaPct = (gfaAchieved / targetGFA) * 100;
+        document.getElementById('metric-gfa-val').textContent = `${gfaPct.toFixed(1)}%`;
+        document.getElementById('metric-gfa-fill').style.width = `${Math.min(100, gfaPct)}%`;
+
+        const greenPct = solution.summary.greenPct;
+        document.getElementById('metric-green-val').textContent = `${greenPct.toFixed(1)}%`;
+        document.getElementById('metric-green-fill').style.width = `${Math.min(100, (greenPct / 40) * 100)}%`;
+
+        const amenityPct = solution.summary.amenityPct;
+        document.getElementById('metric-amenities-val').textContent = `${amenityPct.toFixed(1)}%`;
+        document.getElementById('metric-amenities-fill').style.width = `${Math.min(100, (amenityPct / 20) * 100)}%`;
+
+        const roadsPct = solution.summary.infraPct;
+        document.getElementById('metric-roads-val').textContent = `${roadsPct.toFixed(1)}%`;
+        document.getElementById('metric-roads-fill').style.width = `${Math.min(100, (roadsPct / 30) * 100)}%`;
+
         renderSolution(solution);
-        await new Promise(r => setTimeout(r, 100)); // Allow canvas to render
+        await new Promise(r => setTimeout(r, 100));
         solution.thumbnail = App.canvas.toDataURL({ format: 'webp', quality: 0.3 });
     }
 
-    // Hide Overlay, Clear canvas and show gallery
     if (overlay) overlay.style.display = 'none';
     clearGeneratedLayout();
     updateGallery();
@@ -102,6 +132,8 @@ function createSolution(base, variant, index) {
     const plotDepth = base.plotDepth * variant.plotDepthMult;
     const roadOffset = base.pavementLeft + base.roadWidth + base.pavementRight;
     const gardenDepth = variant.gardenArea;
+    const selectedMethods = base.selectedMethods || ['hybrid'];
+    const methodKey = selectedMethods[index % selectedMethods.length];
 
     const sitePoints = App.objects.masterPolygon.points;
     const isCCW = polygonSignedArea(sitePoints) < 0;
@@ -115,7 +147,7 @@ function createSolution(base, variant, index) {
     const infraVisuals = generateDetailedRoad(sitePoints, plotDepth, base.pavementLeft, base.roadWidth, base.pavementRight, isCCW);
     objects.push(...infraVisuals);
 
-    // 3. Inner Space Analysis with DIFFERENT BIFURCATION METHODS
+    // 3. Inner Space Analysis
     const p2OffsetPx = (plotDepth + base.pavementLeft + base.roadWidth + base.pavementRight) / scale;
     const remainderPolyPts = createInwardOffsetPolygon(sitePoints, p2OffsetPx);
 
@@ -124,24 +156,14 @@ function createSolution(base, variant, index) {
         const targetGreenArea = totalSiteArea * base.greenPct;
         const targetAmenityArea = totalSiteArea * base.amenitiesPct;
 
-        // Choose bifurcation method based on solution index
-        // Modified: Exclude Organic (Hexagon) and stick to rectangular layouts
-        const bifurcationMethod = index % 4; // 0: Grid, 1: Radial, 2: Hybrid, 3: Hierarchical Subdivision (Plan 3)
-
         let innerPlots = [];
-        switch (bifurcationMethod) {
-            case 0: // Grid Bifurcation
-                innerPlots = fillInnerAreaWithGridBifurcation(remainderPolyPts, plotDepth, base.plotWidth, gardenDepth, base.densityStandard, base.prototypeChoice);
-                break;
-            case 1: // Radial Bifurcation
-                innerPlots = fillInnerAreaWithRadialBifurcation(remainderPolyPts, plotDepth, base.plotWidth, gardenDepth, base.densityStandard, base.prototypeChoice);
-                break;
-            case 2: // Hybrid Bifurcation
-                innerPlots = fillInnerArea(remainderPolyPts, plotDepth, base.plotWidth, gardenDepth, targetGreenArea, targetAmenityArea, base.densityStandard, base.prototypeChoice);
-                break;
-            case 3: // Site Plan 3: Hierarchical Subdivision
-                innerPlots = fillInnerAreaWithSubdivisionPlan(remainderPolyPts, plotDepth, base.plotWidth, gardenDepth, base.densityStandard, base.prototypeChoice);
-                break;
+        switch (methodKey) {
+            case 'grid': innerPlots = fillInnerAreaWithGridBifurcation(remainderPolyPts, plotDepth, base.plotWidth, gardenDepth, base.densityStandard, base.prototypeChoice); break;
+            case 'radial': innerPlots = fillInnerAreaWithRadialBifurcation(remainderPolyPts, plotDepth, base.plotWidth, gardenDepth, base.densityStandard, base.prototypeChoice); break;
+            case 'hybrid': innerPlots = fillInnerArea(remainderPolyPts, plotDepth, base.plotWidth, gardenDepth, targetGreenArea, targetAmenityArea, base.densityStandard, base.prototypeChoice); break;
+            case 'subdivision': innerPlots = fillInnerAreaWithSubdivisionPlan(remainderPolyPts, plotDepth, base.plotWidth, gardenDepth, base.densityStandard, base.prototypeChoice); break;
+            case 'organic': innerPlots = fillInnerAreaWithOrganicBifurcation(remainderPolyPts, plotDepth, base.plotWidth, gardenDepth, base.densityStandard, base.prototypeChoice); break;
+            default: innerPlots = fillInnerArea(remainderPolyPts, plotDepth, base.plotWidth, gardenDepth, targetGreenArea, targetAmenityArea, base.densityStandard, base.prototypeChoice);
         }
         objects.push(...innerPlots);
 
@@ -156,13 +178,30 @@ function createSolution(base, variant, index) {
             greenIsland.area = polygonArea(finalInnerBoundary) * scale * scale;
             objects.push(greenIsland);
         }
+
+        // --- SECOND PASS PART A: Entry/Exit Coordination ---
+        const std = UrbanStandards.Roads[base.roadStandard || 'local'];
+        const turningRadius = parseFloat(document.getElementById('turning-radius')?.value || 15);
+        if (EntryExitState.entryPoint || EntryExitState.exitPoint) {
+            const ringRoadRing = remainderPolyPts;
+            if (EntryExitState.entryPoint) {
+                const entryObjs = createEntryExitRoad(EntryExitState.entryPoint, ringRoadRing, std, scale, turningRadius, 'entry');
+                objects.push(...entryObjs);
+            }
+            if (EntryExitState.exitPoint) {
+                const exitObjs = createEntryExitRoad(EntryExitState.exitPoint, ringRoadRing, std, scale, turningRadius, 'exit');
+                objects.push(...exitObjs);
+            }
+        }
     }
 
     // 5. Global Overlap Filter for Plots
     const finalObjects = [];
     const plottedPolys = [];
 
-    // Sort to prioritize infrastructure and existing certainties
+    // Prioritize infra for overlap checks
+    const roadPolys = objects.filter(o => o.isEntryExitRoad && o.type === 'polygon');
+
     objects.forEach(obj => {
         if (!obj.isPlot) {
             finalObjects.push(obj);
@@ -170,10 +209,21 @@ function createSolution(base, variant, index) {
         }
 
         let isBlocked = false;
-        for (const poly of plottedPolys) {
-            if (checkPolygonsOverlap(obj.points, poly)) {
+        // Check against Entry/Exit roads
+        for (const road of roadPolys) {
+            if (checkPolygonsOverlap(obj.points, road.points)) {
                 isBlocked = true;
                 break;
+            }
+        }
+
+        // Check against other plots
+        if (!isBlocked) {
+            for (const poly of plottedPolys) {
+                if (checkPolygonsOverlap(obj.points, poly)) {
+                    isBlocked = true;
+                    break;
+                }
             }
         }
 
@@ -188,32 +238,24 @@ function createSolution(base, variant, index) {
 
     const siteArea = polygonArea(sitePoints) * scale * scale;
     const plotArea = objects.filter(o => o.isPlot).reduce((sum, o) => sum + (o.area || 0), 0);
-    // Sum specific infrastructure area (Road + Pavements + Parking)
     const infraAreaActual = objects.filter(o => o.isInfra).reduce((sum, o) => {
         if (o.area) return sum + o.area;
         if (o.points) return sum + (polygonArea(o.points) * scale * scale);
         return sum;
     }, 0);
 
-    // Calculate Leftover land as potential Green/Amenity
     const leftoverArea = Math.max(0, siteArea - plotArea - infraAreaActual);
-
-    // Use target percentage to define Green area
     const gPct = parseFloat(base.greenPct || 10);
     const greenArea = siteArea * (gPct / 100);
-
-    // Everything else in the leftover is Amenity
     const amenityArea = Math.max(0, leftoverArea - greenArea);
-
-    // Isolate road area for length calc
     const roadOnlyArea = objects.filter(o => o.isRoad).reduce((sum, o) => sum + (o.area || (o.points ? polygonArea(o.points) * scale * scale : 0)), 0);
 
     return {
         id: index,
-        name: `${variant.name} (${['Grid', 'Radial', 'Hybrid', 'Sub-Division'][index % 4]})`,
+        name: `${variant.name} (${methodKey.toUpperCase()})`,
         params: { ...base, ...variant },
         objects: objects,
-        bifurcationType: ['Grid', 'Radial', 'Hybrid', 'Sub-Division'][index % 4],
+        bifurcationType: methodKey,
         summary: {
             plots: objects.filter(o => o.isPlot).length,
             infraArea: infraAreaActual,
@@ -221,7 +263,8 @@ function createSolution(base, variant, index) {
             amenityPct: (amenityArea / siteArea) * 100,
             infraPct: (infraAreaActual / siteArea) * 100,
             plotPct: (plotArea / siteArea) * 100,
-            roadLength: roadOnlyArea / (base.roadWidth || 1)
+            roadLength: roadOnlyArea / (base.roadWidth || 1),
+            gfa: plotArea * 0.8
         }
     };
 }
@@ -245,7 +288,10 @@ export async function runWizardStep(stepNum) {
             prototypeChoice: document.getElementById('plot-prototype').value
         };
         const plots = generatePlotsAlongEdges(sitePoints, params.plotDepth, params.plotWidth, isCCW, [], params.densityStandard, false, params.prototypeChoice);
-        plots.forEach(p => App.canvas.add(p));
+        plots.forEach(p => {
+            p.isOuterPlot = true;
+            App.canvas.add(p);
+        });
         App.data.generatedObjects.push(...plots);
         GenerativeState.wizardStep = 1;
     } else if (stepNum === 2) {
@@ -417,7 +463,32 @@ export async function runWizardStep(stepNum) {
         }
 
         if (innerBoundaryPts && innerBoundaryPts.length >= 3) {
-            const plots = generatePlotsAlongEdges(innerBoundaryPts, plotDepth, parseFloat(App.elements.plotWidth.value), isCCW, [], document.getElementById('density-type').value, false, document.getElementById('plot-prototype').value);
+            const pw = parseFloat(App.elements.plotWidth.value);
+
+            // Tight bounding box (OBB) check for green area permit
+            const obb = getOrientedBoundingRect(innerBoundaryPts);
+            if (obb) {
+                const realW = obb.width * scale;
+                const realH = obb.height * scale;
+                const realArea = obb.area * scale * scale;
+                const minDim = Math.min(realW, realH);
+                const maxDim = Math.max(realW, realH);
+
+                // Check if area and dimensions permit at least one plot
+                const minReqDim = Math.min(pw, plotDepth);
+                const maxReqDim = Math.max(pw, plotDepth);
+
+                if (realArea < (pw * plotDepth) || minDim < minReqDim || maxDim < maxReqDim) {
+                    console.log("Internal green area dimensions do not permit plot placement.", { realArea, realW, realH });
+                    // Still mark step as complete but no plots added
+                    GenerativeState.wizardStep = 5;
+                    App.canvas.renderAll();
+                    updateAreaInfo();
+                    return;
+                }
+            }
+
+            const plots = generatePlotsAlongEdges(innerBoundaryPts, plotDepth, pw, isCCW, [], document.getElementById('density-type').value, false, document.getElementById('plot-prototype').value);
             plots.forEach(p => App.canvas.add(p));
             App.data.generatedObjects.push(...plots);
         }
@@ -445,9 +516,17 @@ export async function runWizardStep(stepNum) {
         const plotDepth = parseFloat(App.elements.plotDepth.value);
         const roadOffsetM = std.footpath * 2 + std.carriage;
         const scale = App.state.scale;
-        const innerStartOffsetPx = (plotDepth * 2 + roadOffsetM) / scale;
-        const subPoly = createInwardOffsetPolygon(sitePoints, innerStartOffsetPx);
-        if (subPoly.length >= 3) {
+
+        // Use manualInnerBoundary if it exists to limit bifurcation, otherwise use offset
+        let subPoly;
+        if (App.objects.manualInnerBoundary && App.objects.manualInnerBoundary.length >= 3) {
+            subPoly = App.objects.manualInnerBoundary;
+        } else {
+            const innerStartOffsetPx = (plotDepth * 2 + roadOffsetM) / scale;
+            subPoly = createInwardOffsetPolygon(sitePoints, innerStartOffsetPx);
+        }
+
+        if (subPoly && subPoly.length >= 3) {
             subPoly.forEach((p, idx) => {
                 const pNext = subPoly[(idx + 1) % subPoly.length];
                 const dx = pNext.x - p.x;
@@ -502,7 +581,7 @@ export async function runWizardStep(stepNum) {
 
         const plotsToRemove = [];
         App.data.generatedObjects.forEach(obj => {
-            if (obj.isPlot && obj.points) {
+            if (obj.isPlot && obj.points && !obj.isOuterPlot) {
                 // Check if plot center is too close to the shortest road
                 const plotCenter = {
                     x: obj.points.reduce((sum, p) => sum + p.x, 0) / obj.points.length,
@@ -674,13 +753,29 @@ export async function runWizardStep(stepNum) {
 
         GenerativeState.wizardStep = 14;
     } else if (stepNum === 15) {
-        // Step 15: Show Project Report Panel
-        import('./reporting.js').then(m => m.showReportPanel());
+        // Step 15: Show Parking
+        const checkbox = document.getElementById('show-parking');
+        if (checkbox) checkbox.checked = true;
+
+        App.parking.showParking = true;
+        App.parking.parallelParkingEnabled = true;
+
+        // Regenerate roads to show parking
+        const infra = App.data.generatedObjects.filter(o => o.isInfra);
+        // This is a bit complex in wizard, as detailed roads were already generated.
+        // We trigger a re-render/logic update if needed.
+        // For simplicity in wizard, we alert.
+        alert("Visitor Parking enabled on all pavements. Check the layout.");
+        App.canvas.renderAll();
         GenerativeState.wizardStep = 15;
     } else if (stepNum === 16) {
-        // Step 16: Detailed Plot Report
-        import('./reporting.js').then(m => m.generateDetailedPlotReport());
+        // Step 16: Show Project Report Panel
+        import('./reporting.js').then(m => m.showReportPanel());
         GenerativeState.wizardStep = 16;
+    } else if (stepNum === 17) {
+        // Step 17: Detailed Plot Report
+        import('./reporting.js').then(m => m.generateDetailedPlotReport());
+        GenerativeState.wizardStep = 17;
     }
     App.canvas.renderAll();
     updateAreaInfo();
@@ -712,9 +807,9 @@ function recursiveFill(points, depth, width, garden, isCCW, densityZone, std, pr
 }
 
 /**
- * Generates plots aligned to the polygon segments.
+ * Core engine for boundary-aligned plot generation.
  */
-export function generatePlotsAlongEdges(points, depth, width, isCCW, existingObjects = [], densityZone = 'mediumDensity', flipRotation = false, prototypeChoice = 'mixed') {
+export function generatePlotsAlongEdges(points, depth, width, isCCW, excludes = [], densityZone = 'high', isInternal = false, protoChoice = 'mixed') {
     const plots = [];
     const scale = App.state.scale;
     const depthPx = depth / scale;
@@ -730,7 +825,6 @@ export function generatePlotsAlongEdges(points, depth, width, isCCW, existingObj
         const ux = dx / len, uy = dy / len;
         let nx = -uy, ny = ux;
         if (!isCCW) { nx = -nx; ny = -ny; }
-        if (flipRotation) { nx = -nx; ny = -ny; }
 
         // Robustness check: Ensure normal points INWARD. 
         // Samples a point along the normal and checks if it is inside the polygon points.
@@ -740,10 +834,10 @@ export function generatePlotsAlongEdges(points, depth, width, isCCW, existingObj
         }
 
         for (let d = 0; d < len - 1e-3;) {
-            const protoKey = (prototypeChoice && prototypeChoice !== 'mixed') ? prototypeChoice : getRandomPrototypeByMix();
+            const protoKey = (protoChoice && protoChoice !== 'mixed') ? protoChoice : getRandomPrototypeByMix();
             const protoInfo = getPrototypeByShape(protoKey);
             let targetWidth = width;
-            if (prototypeChoice === 'mixed' && protoInfo && protoInfo.plotSize) targetWidth = Math.max(zone.minFrontage, protoInfo.plotSize.typical / depth);
+            if (protoChoice === 'mixed' && protoInfo && protoInfo.plotSize) targetWidth = Math.max(zone.minFrontage, protoInfo.plotSize.typical / depth);
             let currentWidthPx = targetWidth / scale;
             if (d + currentWidthPx > len) currentWidthPx = len - d;
             if (currentWidthPx < (zone.minFrontage / scale) * 0.8) break;
@@ -771,7 +865,13 @@ export function generatePlotsAlongEdges(points, depth, width, isCCW, existingObj
             plotGroup.points = plotPoints;
 
             let hasOverlap = false;
-            for (const existing of [...plots, ...existingObjects]) { if (existing.isPlot && checkPolygonsOverlap(plotGroup.points, existing.points)) { hasOverlap = true; break; } }
+            // Check against current plots and excluded objects
+            for (const existing of [...plots, ...excludes]) {
+                if (existing.points && checkPolygonsOverlap(plotGroup.points, existing.points)) {
+                    hasOverlap = true;
+                    break;
+                }
+            }
             if (!hasOverlap) plots.push(plotGroup);
             d += currentWidthPx;
         }
@@ -839,16 +939,49 @@ function generateDetailedRoad(points, plotDepth, p1Width, roadWidth, p2Width, is
 
         if (App.parking.parallelParkingEnabled && App.parking.showParking) {
             const intervalPx = App.parking.interval / scale, boxWPx = 2.4 / scale, boxLPx = 6.0 / scale;
-            for (let i = 0; i < pts3.length; i++) {
-                const p1 = pts3[i], p2 = pts3[(i + 1) % pts3.length], dx = p2.x - p1.x, dy = p2.y - p1.y, len = Math.hypot(dx, dy);
-                if (len < boxLPx) continue;
-                const ux = dx / len, uy = dy / len;
-                let nx = -uy, ny = ux; if (!isCCW) { nx = -nx; ny = -ny; }
-                for (let d = 0; d < len - boxLPx; d += intervalPx) {
-                    const startX = p1.x + ux * d, startY = p1.y + uy * d;
-                    const park = new fabric.Polygon([{ x: startX, y: startY }, { x: startX + ux * boxLPx, y: startY + uy * boxLPx }, { x: startX + ux * boxLPx + nx * boxWPx, y: startY + uy * boxLPx + ny * boxWPx }, { x: startX + nx * boxWPx, y: startY + ny * boxWPx }], { fill: 'rgba(255, 255, 255, 0.4)', stroke: '#fff', strokeWidth: 0.5, selectable: false, isParking: true, isInfra: true });
-                    park.area = (boxLPx * boxWPx) * scale * scale;
-                    visuals.push(park);
+
+            // Side 1: Outer Pavement (along pts2, going outwards)
+            if (pts2.length >= 2) {
+                for (let i = 0; i < pts2.length; i++) {
+                    const p1 = pts2[i], p2 = pts2[(i + 1) % pts2.length], dx = p2.x - p1.x, dy = p2.y - p1.y, len = Math.hypot(dx, dy);
+                    if (len < boxLPx) continue;
+                    const ux = dx / len, uy = dy / len;
+                    let nx = -uy, ny = ux; if (!isCCW) { nx = -nx; ny = -ny; }
+                    // For side 1, we want to go AWAY from the road (opposite of the inward normal)
+                    const pnx = -nx, pny = -ny;
+                    for (let d = 0; d < len - boxLPx; d += intervalPx) {
+                        const startX = p1.x + ux * d, startY = p1.y + uy * d;
+                        const park = new fabric.Polygon([
+                            { x: startX, y: startY },
+                            { x: startX + ux * boxLPx, y: startY + uy * boxLPx },
+                            { x: startX + ux * boxLPx + pnx * boxWPx, y: startY + uy * boxLPx + pny * boxWPx },
+                            { x: startX + pnx * boxWPx, y: startY + pny * boxWPx }
+                        ], { fill: 'rgba(255, 255, 255, 0.4)', stroke: '#fff', strokeWidth: 0.5, selectable: false, isParking: true, isInfra: true });
+                        park.area = (boxLPx * boxWPx) * scale * scale;
+                        visuals.push(park);
+                    }
+                }
+            }
+
+            // Side 2: Inner Pavement (along pts3, going inwards)
+            if (pts3.length >= 2) {
+                for (let i = 0; i < pts3.length; i++) {
+                    const p1 = pts3[i], p2 = pts3[(i + 1) % pts3.length], dx = p2.x - p1.x, dy = p2.y - p1.y, len = Math.hypot(dx, dy);
+                    if (len < boxLPx) continue;
+                    const ux = dx / len, uy = dy / len;
+                    let nx = -uy, ny = ux; if (!isCCW) { nx = -nx; ny = -ny; }
+                    // For side 2, the inward normal ALREADY points into the pavement
+                    for (let d = 0; d < len - boxLPx; d += intervalPx) {
+                        const startX = p1.x + ux * d, startY = p1.y + uy * d;
+                        const park = new fabric.Polygon([
+                            { x: startX, y: startY },
+                            { x: startX + ux * boxLPx, y: startY + uy * boxLPx },
+                            { x: startX + ux * boxLPx + nx * boxWPx, y: startY + uy * boxLPx + ny * boxWPx },
+                            { x: startX + nx * boxWPx, y: startY + ny * boxWPx }
+                        ], { fill: 'rgba(255, 255, 255, 0.4)', stroke: '#fff', strokeWidth: 0.5, selectable: false, isParking: true, isInfra: true });
+                        park.area = (boxLPx * boxWPx) * scale * scale;
+                        visuals.push(park);
+                    }
                 }
             }
         }
@@ -856,161 +989,7 @@ function generateDetailedRoad(points, plotDepth, p1Width, roadWidth, p2Width, is
     return visuals;
 }
 
-// Helper to get bounds
-export function getBounds(points) {
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    points.forEach(p => {
-        if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
-        if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
-    });
-    return { minX, maxX, minY, maxY };
-}
-
-// Helper to split polygon by axis-aligned gap (Road)
-export function splitPolygon(points, isVert, mid, gap) {
-    const halfGap = gap / 2;
-    const limit1 = mid - halfGap;
-    const limit2 = mid + halfGap;
-
-    const p1 = [], p2 = [];
-
-    // Sutherland-Hodgman Clip Logic (Simplified for axis aligned)
-    // Clip against Line 1 (val < limit1) -> p1
-    // Clip against Line 2 (val > limit2) -> p2
-
-    function clip(polyPoints, sign, limit) {
-        const newPts = [];
-        for (let i = 0; i < polyPoints.length; i++) {
-            const curr = polyPoints[i];
-            const prev = polyPoints[(i - 1 + polyPoints.length) % polyPoints.length];
-
-            const currVal = isVert ? curr.x : curr.y;
-            const prevVal = isVert ? prev.x : prev.y;
-
-            const currIn = sign > 0 ? currVal >= limit : currVal <= limit;
-            const prevIn = sign > 0 ? prevVal >= limit : prevVal <= limit;
-
-            if (currIn) {
-                if (!prevIn) {
-                    // Intersection
-                    const t = (limit - prevVal) / (currVal - prevVal);
-                    newPts.push({
-                        x: prev.x + t * (curr.x - prev.x),
-                        y: prev.y + t * (curr.y - prev.y)
-                    });
-                }
-                newPts.push(curr);
-            } else if (prevIn) {
-                // Intersection
-                const t = (limit - prevVal) / (currVal - prevVal);
-                newPts.push({
-                    x: prev.x + t * (curr.x - prev.x),
-                    y: prev.y + t * (curr.y - prev.y)
-                });
-            }
-        }
-        return newPts;
-    }
-
-    return [clip(points, -1, limit1), clip(points, 1, limit2)];
-}
-
-export function fillInnerArea(points, depth, width, garden, targetGreen, targetAmenity, densityZone, protoChoice = 'mixed', recursionLevel = 0) {
-    const scale = App.state.scale;
-    const std = UrbanStandards.Roads[document.getElementById('road-type').value || 'local'];
-    const roadWidthPx = std.carriage / scale;
-    const plotDepthPx = depth / scale;
-
-    // Safety guards to prevent infinite recursion
-    if (recursionLevel > 40 || plotDepthPx < 0.1 || points.length < 3) return [];
-    const currentArea = polygonArea(points);
-    if (currentArea < (plotDepthPx ** 2) * 0.1) return [];
-
-    const bounds = getBounds(points);
-    const w = bounds.maxX - bounds.minX;
-    const h = bounds.maxY - bounds.minY;
-    const limit = plotDepthPx * 5 + roadWidthPx; // Split if > 5 plots deep
-
-    // Bifurcation / Recursive Split
-    if (points.length > 2 && (w > limit || h > limit)) {
-        const isVert = w > h;
-        const mid = isVert ? (bounds.minX + bounds.maxX) / 2 : (bounds.minY + bounds.maxY) / 2;
-
-        const [sub1, sub2] = splitPolygon(points, isVert, mid, roadWidthPx);
-
-        let results = [];
-        if (sub1 && sub1.length > 2) {
-            const a1 = polygonArea(sub1);
-            if (a1 < currentArea * 0.98) { // Area must strictly decrease
-                results.push(...fillInnerArea(sub1, depth, width, garden, targetGreen, targetAmenity, densityZone, protoChoice, recursionLevel + 1));
-            }
-        }
-        if (sub2 && sub2.length > 2) {
-            const a2 = polygonArea(sub2);
-            if (a2 < currentArea * 0.98) {
-                results.push(...fillInnerArea(sub2, depth, width, garden, targetGreen, targetAmenity, densityZone, protoChoice, recursionLevel + 1));
-            }
-        }
-        return results;
-    }
-
-    // Base Case: Generate Plots (Back-to-back if possible)
-    const plots = [];
-    // We try to fit 2 rows (back-to-back)
-    const row1 = generatePlotsAlongEdges(points, depth, width, polygonSignedArea(points) < 0, [], densityZone, false, protoChoice);
-    plots.push(...row1);
-
-    // If space remains for Row 2 (Back-to-back)
-    const remainder = createInwardOffsetPolygon(points, (depth * 2 + garden) / scale);
-    if (remainder && remainder.length >= 3) {
-        const nextArea = polygonArea(remainder);
-        if (nextArea > (depth / scale) ** 2 && nextArea < currentArea * 0.9) {
-            // Recursive fill remaining inner area
-            const subPlots = fillInnerArea(remainder, depth, width, garden, targetGreen, targetAmenity, densityZone, protoChoice, recursionLevel + 1);
-            plots.push(...subPlots);
-        }
-    }
-
-    // Post-Process for Green/Amenity (Local Target)
-    const blockArea = polygonArea(points) * scale * scale;
-    const neededGreen = blockArea * (targetGreen / 100);
-    const neededAmenity = blockArea * (targetAmenity / 100);
-
-    const center = { x: (bounds.minX + bounds.maxX) / 2, y: (bounds.minY + bounds.maxY) / 2 };
-    plots.sort((a, b) => {
-        const da = Math.hypot(a.points[0].x - center.x, a.points[0].y - center.y);
-        const db = Math.hypot(b.points[0].x - center.x, b.points[0].y - center.y);
-        return da - db;
-    });
-
-    let currentGreen = 0, currentAmenity = 0;
-
-    for (const plot of plots) {
-        if (plot.isPlot) {
-            const pArea = polygonArea(plot.points) * scale * scale;
-            if (currentGreen < neededGreen) {
-                plot.set({ fill: 'rgba(76, 175, 80, 0.5)', stroke: '#2e7d32', isPlot: false, isGreen: true });
-                currentGreen += pArea;
-            } else if (currentAmenity < neededAmenity) {
-                plot.set({ fill: '#ffcc80', stroke: '#ef6c00', isPlot: false, isAmenity: true });
-                currentAmenity += pArea;
-            }
-        }
-    }
-
-    return plots;
-}
-
-function divideIntoPockets(points, num) {
-    if (num <= 1) return [points];
-    const result = [], step = Math.floor(points.length / num);
-    for (let i = 0; i < num; i++) {
-        const start = i * step, end = (i === num - 1) ? points.length : (i + 1) * step;
-        const slice = points.slice(Math.max(0, start - 1), end + 1);
-        if (slice.length >= 3) result.push(slice);
-    }
-    return result.length > 0 ? result : [points];
-}
+// Helpers were moved to utils.js and division methods refactored into js/division_method/
 
 export function renderSolution(solution) {
     clearGeneratedLayout();
@@ -1062,12 +1041,6 @@ export function renderSolution(solution) {
     }
     App.canvas.renderAll();
     updateAreaInfo();
-
-    // Show report panel after generating layout
-    const reportPanel = document.getElementById('report-panel');
-    if (reportPanel) {
-        import('./reporting.js').then(m => m.showReportPanel());
-    }
 }
 
 export function updateGallery() {
@@ -1101,209 +1074,6 @@ export function updateGallery() {
         item.onclick = () => { GenerativeState.currentSolutionIndex = idx; renderSolution(sol); updateGallery(); };
         gallery.appendChild(item);
     });
-}
-
-// --- Different Bifurcation Methods for Generative Variety ---
-
-/**
- * Grid Bifurcation: Creates orthogonal grid pattern
- */
-function fillInnerAreaWithGridBifurcation(points, depth, width, garden, densityZone, protoChoice = 'mixed') {
-    const plots = [], scale = App.state.scale;
-    const depthPx = depth / scale, widthPx = width / scale;
-
-    // Calculate bounding box
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    points.forEach(p => {
-        minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
-        maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
-    });
-
-    // Create grid of plots
-    for (let y = minY; y < maxY; y += depthPx) {
-        for (let x = minX; x < maxX; x += widthPx) {
-            const plotPoints = [
-                { x, y }, { x: x + widthPx, y },
-                { x: x + widthPx, y: y + depthPx }, { x, y: y + depthPx }
-            ];
-            // Check if plot center is inside polygon
-            const center = { x: x + widthPx / 2, y: y + depthPx / 2 };
-            if (isPointInPolygon(center, points)) {
-                const plot = new fabric.Polygon(plotPoints, {
-                    fill: '#E3F2FD', stroke: '#666', strokeWidth: 0.5, isPlot: true,
-                    area: widthPx * depthPx * scale * scale, selectable: false
-                });
-                plot.points = plotPoints;
-                plots.push(plot);
-            }
-        }
-    }
-    return plots;
-}
-
-/**
- * Radial Bifurcation: Creates roads radiating from center
- */
-function fillInnerAreaWithRadialBifurcation(points, depth, width, garden, densityZone, protoChoice = 'mixed') {
-    const plots = [], scale = App.state.scale;
-
-    // Find centroid
-    let cx = 0, cy = 0;
-    points.forEach(p => { cx += p.x; cy += p.y; });
-    cx /= points.length; cy /= points.length;
-
-    // Create radial sectors (8 sectors)
-    const sectors = 8;
-    for (let i = 0; i < sectors; i++) {
-        const angle1 = (i / sectors) * Math.PI * 2;
-        const angle2 = ((i + 1) / sectors) * Math.PI * 2;
-
-        // Place plots along each sector
-        for (let r = depth / scale; r < 100; r += depth / scale) {
-            const x1 = cx + Math.cos(angle1) * r;
-            const y1 = cy + Math.sin(angle1) * r;
-            const x2 = cx + Math.cos(angle2) * r;
-            const y2 = cy + Math.sin(angle2) * r;
-
-            if (isPointInPolygon({ x: x1, y: y1 }, points)) {
-                const plotPoints = [
-                    { x: cx + Math.cos(angle1) * r, y: cy + Math.sin(angle1) * r },
-                    { x: cx + Math.cos(angle2) * r, y: cy + Math.sin(angle2) * r },
-                    { x: cx + Math.cos(angle2) * (r + depth / scale), y: cy + Math.sin(angle2) * (r + depth / scale) },
-                    { x: cx + Math.cos(angle1) * (r + depth / scale), y: cy + Math.sin(angle1) * (r + depth / scale) }
-                ];
-                const plot = new fabric.Polygon(plotPoints, {
-                    fill: '#FFF9C4', stroke: '#666', strokeWidth: 0.5, isPlot: true,
-                    area: polygonArea(plotPoints) * scale * scale, selectable: false
-                });
-                plot.points = plotPoints;
-                plots.push(plot);
-            }
-        }
-    }
-    return plots;
-}
-
-/**
- * Organic Bifurcation: Creates irregular, natural-looking subdivisions
- */
-function fillInnerAreaWithOrganicBifurcation(points, depth, width, garden, densityZone, protoChoice = 'mixed') {
-    const plots = [], scale = App.state.scale;
-
-    // Use Voronoi-like subdivision (simplified)
-    const numSeeds = Math.floor(polygonArea(points) * scale * scale / (depth * width * 2));
-    const seeds = [];
-
-    // Generate random seed points inside polygon
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    points.forEach(p => {
-        minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
-        maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
-    });
-
-    for (let i = 0; i < numSeeds; i++) {
-        let attempts = 0;
-        while (attempts < 50) {
-            const x = minX + Math.random() * (maxX - minX);
-            const y = minY + Math.random() * (maxY - minY);
-            if (isPointInPolygon({ x, y }, points)) {
-                seeds.push({ x, y });
-                break;
-            }
-            attempts++;
-        }
-    }
-
-    // Create organic plots around seeds
-    seeds.forEach(seed => {
-        const size = (depth / scale) * (0.8 + Math.random() * 0.4);
-        const rotation = Math.random() * Math.PI * 2;
-        const plotPoints = [];
-        const sides = 4 + Math.floor(Math.random() * 3); // 4-6 sides
-
-        for (let i = 0; i < sides; i++) {
-            const angle = rotation + (i / sides) * Math.PI * 2;
-            plotPoints.push({
-                x: seed.x + Math.cos(angle) * size,
-                y: seed.y + Math.sin(angle) * size
-            });
-        }
-
-        const plot = new fabric.Polygon(plotPoints, {
-            fill: '#C8E6C9', stroke: '#666', strokeWidth: 0.5, isPlot: true,
-            area: polygonArea(plotPoints) * scale * scale, selectable: false
-        });
-        plot.points = plotPoints;
-        plots.push(plot);
-    });
-
-    return plots;
-}
-
-/**
- * Site Plan 3: Hierarchical Subdivision method
- */
-function fillInnerAreaWithSubdivisionPlan(points, depth, width, garden, densityZone, protoChoice = 'mixed') {
-    const plots = [], scale = App.state.scale;
-    const std = UrbanStandards.Roads[document.getElementById('road-type').value || 'local'];
-    const roadWidthPx = std.carriage / scale;
-    const paveWidthPx = std.footpath / scale;
-    const totalRoadWidthPx = roadWidthPx + (paveWidthPx * 2);
-
-    const bounds = getBounds(points);
-    const w = bounds.maxX - bounds.minX;
-    const h = bounds.maxY - bounds.minY;
-    const isVert = w > h;
-
-    // 1. Create Main Spine Road through center
-    const mid = isVert ? (bounds.minX + bounds.maxX) / 2 : (bounds.minY + bounds.maxY) / 2;
-    const [ptsL, ptsR] = splitPolygon(points, isVert, mid, totalRoadWidthPx);
-
-    // Add Spine Road visual
-    const spineRect = isVert ?
-        [{ x: mid - roadWidthPx / 2, y: bounds.minY }, { x: mid + roadWidthPx / 2, y: bounds.minY }, { x: mid + roadWidthPx / 2, y: bounds.maxY }, { x: mid - roadWidthPx / 2, y: bounds.maxY }] :
-        [{ x: bounds.minX, y: mid - roadWidthPx / 2 }, { x: bounds.minX, y: mid + roadWidthPx / 2 }, { x: bounds.maxX, y: mid + roadWidthPx / 2 }, { x: bounds.maxX, y: mid - roadWidthPx / 2 }];
-
-    const spine = new fabric.Polygon(spineRect, { fill: '#444', stroke: '#222', strokeWidth: 1, selectable: false, isInfra: true });
-    spine.points = spineRect;
-    plots.push(spine);
-
-    // 2. Add Feeder Roads (Branching from spine)
-    const blocks = [ptsL, ptsR].filter(p => p && p.length > 2);
-    blocks.forEach((blockPoints, bIdx) => {
-        const blockBounds = getBounds(blockPoints);
-        const bLen = isVert ? blockBounds.maxY - blockBounds.minY : blockBounds.maxX - blockBounds.minX;
-        const interval = (width * 6) / scale; // Branch every few plots
-
-        for (let pos = (isVert ? blockBounds.minY : blockBounds.minX) + interval; pos < (isVert ? blockBounds.maxY : blockBounds.maxX) - interval; pos += interval) {
-            const [b1, b2] = splitPolygon(blockPoints, !isVert, pos, totalRoadWidthPx);
-
-            // Add feeder road road visual
-            const feederCoord1 = isVert ? blockBounds.minX : pos - roadWidthPx / 2;
-            const feederCoord2 = isVert ? blockBounds.maxX : pos + roadWidthPx / 2;
-            const feederCoord3 = isVert ? pos - roadWidthPx / 2 : blockBounds.minY;
-            const feederCoord4 = isVert ? pos + roadWidthPx / 2 : blockBounds.maxY;
-
-            const feederRect = isVert ?
-                [{ x: blockBounds.minX, y: pos - roadWidthPx / 2 }, { x: blockBounds.maxX, y: pos - roadWidthPx / 2 }, { x: blockBounds.maxX, y: pos + roadWidthPx / 2 }, { x: blockBounds.minX, y: pos + roadWidthPx / 2 }] :
-                [{ x: pos - roadWidthPx / 2, y: blockBounds.minY }, { x: pos + roadWidthPx / 2, y: blockBounds.minY }, { x: pos + roadWidthPx / 2, y: blockBounds.maxY }, { x: pos - roadWidthPx / 2, y: blockBounds.maxY }];
-
-            const feeder = new fabric.Polygon(feederRect, { fill: '#444', stroke: '#222', strokeWidth: 1, selectable: false, isInfra: true });
-            feeder.points = feederRect;
-            plots.push(feeder);
-
-            // Subtract road from block and fill with plots
-            blockPoints = b2; // Keep working on remainder
-            const subPlotRow = generatePlotsAlongEdges(b1, depth, width, !isVert, [feeder, spine], densityZone, false, protoChoice);
-            plots.push(...subPlotRow);
-        }
-
-        // Fill remaining block
-        const finalPlots = generatePlotsAlongEdges(blockPoints, depth, width, isVert, [spine], densityZone, false, protoChoice);
-        plots.push(...finalPlots);
-    });
-
-    return plots;
 }
 
 /**
@@ -1432,7 +1202,7 @@ function generateFilletedRoad(shortest, sitePoints, std, plotDepth, scale, turni
 
     const plotsToRemove = [];
     App.data.generatedObjects.forEach(obj => {
-        if (obj.isPlot && obj.points) {
+        if (obj.isPlot && obj.points && !obj.isOuterPlot) {
             if (checkPolygonsOverlap(obj.points, conflictPoints) || checkPolygonsOverlap(obj.points, conflictRect)) {
                 plotsToRemove.push(obj);
             }

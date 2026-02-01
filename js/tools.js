@@ -52,11 +52,20 @@ export function handleCalibration(pointer) {
     if (App.data.calibrationPoints.length === 2) {
         const p1 = App.data.calibrationPoints[0], p2 = App.data.calibrationPoints[1];
         const pixelDist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-        const realDistStr = prompt(`Enter real-world distance for the selected line in meters:`);
-        const realDist = parseFloat(realDistStr);
+        
+        // Use value from input field if available, otherwise prompt
+        const manualInput = document.getElementById('manual-scale-input');
+        let realDist = manualInput ? parseFloat(manualInput.value) : NaN;
+
+        if (isNaN(realDist) || realDist <= 0) {
+            const realDistStr = prompt(`Enter real-world distance for the selected line in meters:`);
+            realDist = parseFloat(realDistStr);
+        }
+
         if (!isNaN(realDist) && realDist > 0) {
             App.state.scale = realDist / pixelDist;
             App.elements.scaleInfo.textContent = `1px = ${App.state.scale.toFixed(3)}m`;
+            if (manualInput) manualInput.value = ''; // Clear input after successful calibration
         } else {
             alert("Invalid distance entered.");
         }

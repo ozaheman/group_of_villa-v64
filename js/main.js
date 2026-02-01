@@ -2,7 +2,7 @@
 
 import { App } from './appState.js';
 import { initCanvas, resetView, clearCanvas } from './canvas.js';
-import { setMode, updateAreaInfo } from './ui.js';
+import { setMode, updateAreaInfo, updateRequiredAreas } from './ui.js';
 import { finishDrawing, removeSelectedVertex, generateTangentCircles, drawPlotBackLines, arrayCircles, subdivideInnerPlots, createInnerHouseLots } from './polygon.js';
 import { finishRoadDrawing, bufferRoad, setInnerBoundaryAsPlot } from './road.js';
 import { handleBackgroundLoad } from './io.js';
@@ -154,11 +154,18 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('step-14')?.addEventListener('click', () => runWizardStep(14));
     document.getElementById('step-15')?.addEventListener('click', () => runWizardStep(15));
     document.getElementById('step-16')?.addEventListener('click', () => runWizardStep(16));
+    document.getElementById('step-17')?.addEventListener('click', () => runWizardStep(17));
     document.getElementById('step-finalize')?.addEventListener('click', () => runWizardStep(8)); // Redirect finalize to original Step 8 logic
 
     // Range slider value display
-    document.getElementById('green-area')?.addEventListener('input', (e) => document.getElementById('green-area-val').textContent = e.target.value);
-    document.getElementById('amenities-area')?.addEventListener('input', (e) => document.getElementById('amenities-area-val').textContent = e.target.value);
+    document.getElementById('green-area')?.addEventListener('input', (e) => {
+        document.getElementById('green-area-val').textContent = e.target.value;
+        updateRequiredAreas();
+    });
+    document.getElementById('amenities-area')?.addEventListener('input', (e) => {
+        document.getElementById('amenities-area-val').textContent = e.target.value;
+        updateRequiredAreas();
+    });
 
     // Prototype Management
     App.elements.overrideMode?.addEventListener('change', (e) => {
@@ -312,7 +319,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // DXF & Labels
     document.getElementById('export-dxf-btn')?.addEventListener('click', () => {
-        import('./dxfExport.js').then(m => m.exportToDXF(App.data.generatedObjects));
+        import('./dxfExport.js').then(m => {
+            const objects = App.canvas.getObjects().filter(o => 
+                !o.isVertex && 
+                !o.isMidpoint && 
+                !o.isEditVertex && 
+                !o.isEditMidpoint && 
+                !o.isControl &&
+                !o.isEntryMarker &&
+                !o.isExitMarker &&
+                o.visible !== false
+            );
+            m.exportToDXF(objects);
+        });
     });
 
     document.getElementById('toggle-labels')?.addEventListener('change', (e) => {
@@ -367,4 +386,49 @@ document.addEventListener('DOMContentLoaded', () => {
     updateAreaInfo();
     updateMixUI();
     initMarketSearch();
+
+    // Custom Dropdown Logic
+    const dropdownTrigger = document.getElementById('methods-trigger');
+    const dropdownContent = document.getElementById('methods-options');
+    
+    if (dropdownTrigger && dropdownContent) {
+        console.log('Dropdown elements found'); // Debug
+        
+        dropdownTrigger.addEventListener('click', (e) => {
+            console.log('Dropdown trigger clicked'); // Debug
+            e.stopPropagation();
+            dropdownContent.classList.toggle('show');
+            console.log('Dropdown visibility toggled, show class:', dropdownContent.classList.contains('show')); // Debug
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!dropdownTrigger.contains(e.target) && !dropdownContent.contains(e.target)) {
+                if (dropdownContent.classList.contains('show')) {
+                    console.log('Closing dropdown from outside click'); // Debug
+                    dropdownContent.classList.remove('show');
+                }
+            }
+        });
+
+        const updateTriggerText = () => {
+            const checked = dropdownContent.querySelectorAll('input[type="checkbox"]:checked');
+            const total = dropdownContent.querySelectorAll('input[type="checkbox"]').length;
+            const span = dropdownTrigger.querySelector('span');
+            
+            if (checked.length === 0) {
+                span.textContent = 'Select Methods (None)';
+            } else if (checked.length === total) {
+                span.textContent = 'Select Methods (All)';
+            } else {
+                span.textContent = `Select Methods (${checked.length})`;
+            }
+        };
+
+        dropdownContent.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+            cb.addEventListener('change', updateTriggerText);
+        });
+        
+        // Initial update
+        updateTriggerText();
+    }
 });

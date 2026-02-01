@@ -1,15 +1,14 @@
 
 import { App } from './appState.js';
-import { offsetPolyline, createInwardOffsetPolygon, polygonArea, pointsToPathData, getSegmentIntersection, splitPolygonGeneral } from './utils.js';
-import { generatePlotsAlongEdges, fillInnerArea } from './generative.js';
+import { offsetPolyline, createInwardOffsetPolygon, polygonArea, pointsToPathData, getSegmentIntersection, splitPolygonGeneral, getBounds, splitPolygon, isPointInPolygon } from './utils.js';
+import { generatePlotsAlongEdges } from './generative.js';
+import { fillInnerArea } from './division_method/hybrid.js';
 import { createInnerGreenAreaPolygon } from './greenArea.js';
 import { createEntryExitRoad, removeConflictingPlots } from './entryExitRoadHelpers.js';
 import { EntryExitState } from './entryExit.js';
 import { UrbanStandards } from './standards.js';
 import { clearGeneratedLayout, setMode } from './ui.js';
 import { createVertexHandles } from './polygon.js';
-import { getBounds, splitPolygon } from './generative.js';
-import { isPointInPolygon } from './utils.js';
 import { updateAreaInfo } from './ui.js';
 
 export function generatePlotsOuter() {

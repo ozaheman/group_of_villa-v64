@@ -72,8 +72,14 @@ export function handleEntryExitClick(pointer) {
 
     if (EntryExitState.mode === 'entry') {
         placeEntryPoint(nearestPoint);
+        if (document.getElementById('same-entry-exit')?.checked) {
+            placeExitPoint(nearestPoint);
+        }
     } else if (EntryExitState.mode === 'exit') {
         placeExitPoint(nearestPoint);
+        if (document.getElementById('same-entry-exit')?.checked) {
+            placeEntryPoint(nearestPoint);
+        }
     }
 
     resetEntryExitMode();

@@ -32,7 +32,7 @@ export function setMode(newMode) {
 
     // Enable/Disable Step Wizard
     const hasPolygon = !!App.objects.activePolygon;
-    ['step-1', 'step-2', 'step-3', 'step-4', 'step-5', 'step-6', 'step-7', 'step-8', 'step-9', 'step-10', 'step-11', 'step-12', 'step-13', 'step-14'].forEach(id => {
+    ['step-1', 'step-2', 'step-3', 'step-4', 'step-5', 'step-6', 'step-7', 'step-8', 'step-9', 'step-10', 'step-11', 'step-12', 'step-13', 'step-14', 'step-15', 'step-16', 'step-17'].forEach(id => {
         const btn = document.getElementById(id);
         if (btn) btn.disabled = !hasPolygon;
     });
@@ -96,7 +96,8 @@ export function setMode(newMode) {
 
 export function updateAreaInfo() {
     const totalSiteAreaM2 = App.objects.masterPolygon ? polygonArea(App.objects.masterPolygon.points) * App.state.scale * App.state.scale : 0;
-    App.elements.totalArea.textContent = `${totalSiteAreaM2.toFixed(2)} m²`;
+    const totalSiteAreaSft = totalSiteAreaM2 * 10.7639;
+    App.elements.totalArea.textContent = `${totalSiteAreaM2.toFixed(2)} m² | ${totalSiteAreaSft.toFixed(2)} sq.ft`;
 
     const plots = App.data.generatedObjects.filter(o => o.isTangentCircle || o.isPlot);
     const plotCount = plots.length;
@@ -110,8 +111,9 @@ export function updateAreaInfo() {
             totalPlotAreaM2 += Math.PI * r * r;
         }
     });
+    const totalPlotAreaSft = totalPlotAreaM2 * 10.7639;
 
-    App.elements.plotAreaCalc.textContent = `${totalPlotAreaM2.toFixed(2)} m²`;
+    App.elements.plotAreaCalc.textContent = `${totalPlotAreaM2.toFixed(2)} m² | ${totalPlotAreaSft.toFixed(2)} sq.ft`;
     App.elements.plotCount.textContent = plotCount;
 
     // Infrastructure Area
@@ -123,17 +125,19 @@ export function updateAreaInfo() {
             // Groups might contain road polygons if complex
         }
     });
+    const infraAreaSft = infraAreaM2 * 10.7639;
     const infraEl = document.getElementById('infra-area-calc');
-    if (infraEl) infraEl.textContent = `${infraAreaM2.toFixed(2)} m²`;
+    if (infraEl) infraEl.textContent = `${infraAreaM2.toFixed(2)} m² | ${infraAreaSft.toFixed(2)} sq.ft`;
 
     // Green Area (Multiple polygons)
     let totalGreenM2 = 0;
     App.data.generatedObjects.filter(o => o.isGreenArea || o.isGreen).forEach(o => {
         if (o.points) totalGreenM2 += polygonArea(o.points) * App.state.scale * App.state.scale;
     });
+    const totalGreenSft = totalGreenM2 * 10.7639;
     const greenPercent = totalSiteAreaM2 > 0 ? (totalGreenM2 / totalSiteAreaM2) * 100 : 0;
     const greenPercentEl = document.getElementById('green-area-percent');
-    if (greenPercentEl) greenPercentEl.textContent = `${greenPercent.toFixed(2)} %`;
+    if (greenPercentEl) greenPercentEl.textContent = `${totalGreenM2.toFixed(2)} m² | ${totalGreenSft.toFixed(2)} sq.ft (${greenPercent.toFixed(2)} %)`;
 
     // Amenities area (Multiple polygons)
     let amenitiesAreaM2 = 0;
@@ -142,9 +146,38 @@ export function updateAreaInfo() {
             amenitiesAreaM2 += polygonArea(amenity.points) * App.state.scale * App.state.scale;
         }
     });
+    const amenitiesAreaSft = amenitiesAreaM2 * 10.7639;
     const amenitiesPercentage = totalSiteAreaM2 > 0 ? (amenitiesAreaM2 / totalSiteAreaM2) * 100 : 0;
     const amenitiesPercentEl = document.getElementById('amenities-area-percent');
-    if (amenitiesPercentEl) amenitiesPercentEl.textContent = `${amenitiesPercentage.toFixed(2)} %`;
+    if (amenitiesPercentEl) amenitiesPercentEl.textContent = `${amenitiesAreaM2.toFixed(2)} m² | ${amenitiesAreaSft.toFixed(2)} sq.ft (${amenitiesPercentage.toFixed(2)} %)`;
+
+    updateRequiredAreas();
+}
+
+export function updateRequiredAreas() {
+    const totalSiteAreaM2 = App.objects.masterPolygon ? polygonArea(App.objects.masterPolygon.points) * App.state.scale * App.state.scale : 0;
+    
+    // Green Area Required
+    const greenSlider = document.getElementById('green-area');
+    const greenVal = greenSlider ? parseFloat(greenSlider.value) : 0;
+    const requiredGreenM2 = totalSiteAreaM2 * (greenVal / 100);
+    const requiredGreenSft = requiredGreenM2 * 10.7639;
+    
+    const greenReqEl = document.getElementById('green-area-required');
+    if (greenReqEl) {
+        greenReqEl.textContent = `Required: ${requiredGreenM2.toFixed(2)} m² | ${requiredGreenSft.toFixed(2)} sq.ft`;
+    }
+
+    // Amenities Area Required
+    const amenitiesSlider = document.getElementById('amenities-area');
+    const amenitiesVal = amenitiesSlider ? parseFloat(amenitiesSlider.value) : 0;
+    const requiredAmenitiesM2 = totalSiteAreaM2 * (amenitiesVal / 100);
+    const requiredAmenitiesSft = requiredAmenitiesM2 * 10.7639;
+    
+    const amenitiesReqEl = document.getElementById('amenities-area-required');
+    if (amenitiesReqEl) {
+        amenitiesReqEl.textContent = `Required: ${requiredAmenitiesM2.toFixed(2)} m² | ${requiredAmenitiesSft.toFixed(2)} sq.ft`;
+    }
 }
 
 export function clearGeneratedLayout() {

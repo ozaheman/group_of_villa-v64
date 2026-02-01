@@ -242,71 +242,153 @@ export function getSegmentIntersection(p1, p2, p3, p4) {
 }
 
 /**
- * Clips a polygon against an infinite line defined by p1 and p2.
- * @param {Array} polyPoints - Points of the polygon
- * @param {Object} lineP1 - First point of the line
- * @param {Object} lineP2 - Second point of the line
- * @param {Number} side - Which side to keep (1 or -1)
+ * Calculates the oriented bounding box (tight bounding box) for a set of points.
+ * @param {Array<{x: number, y: number}>} points - The vertices of the polygon.
+ * @returns {{width: number, height: number, area: number, angle: number}} - The OBB properties.
  */
-export function clipPolygon(polyPoints, lineP1, lineP2, side) {
-    const newPts = [];
-    const dx = lineP2.x - lineP1.x;
-    const dy = lineP2.y - lineP1.y;
-    const nx = -dy;
-    const ny = dx;
+export function getOrientedBoundingRect(points) {
+    if (!points || points.length < 3) return null;
+    let minArea = Infinity;
+    let bestOBB = null;
 
-    const isInside = (p) => {
-        const dot = (p.x - lineP1.x) * nx + (p.y - lineP1.y) * ny;
-        return (side * dot) >= 0;
-    };
+    for (let i = 0; i < points.length; i++) {
+        const p1 = points[i];
+        const p2 = points[(i + 1) % points.length];
+        const dx = p2.x - p1.x;
+        const dy = p2.y - p1.y;
+        const len = Math.hypot(dx, dy);
+        if (len < 1e-6) continue;
 
-    for (let i = 0; i < polyPoints.length; i++) {
-        const curr = polyPoints[i];
-        const prev = polyPoints[(i - 1 + polyPoints.length) % polyPoints.length];
+        const angle = Math.atan2(dy, dx);
+        const cos = Math.cos(-angle);
+        const sin = Math.sin(-angle);
 
-        const currIn = isInside(curr);
-        const prevIn = isInside(prev);
+        let minX = Infinity, maxX = -Infinity;
+        let minY = Infinity, maxY = -Infinity;
 
-        if (currIn) {
-            if (!prevIn) {
-                const inter = getLineIntersection(prev, curr, lineP1, lineP2);
-                if (inter) newPts.push(inter);
-            }
-            newPts.push(curr);
-        } else if (prevIn) {
-            const inter = getLineIntersection(prev, curr, lineP1, lineP2);
-            if (inter) newPts.push(inter);
+        for (const p of points) {
+            const rx = (p.x * cos - p.y * sin);
+            const ry = (p.x * sin + p.y * cos);
+            if (rx < minX) minX = rx;
+            if (rx > maxX) maxX = rx;
+            if (ry < minY) minY = ry;
+            if (ry > maxY) maxY = ry;
+        }
+
+        const width = maxX - minX;
+        const height = maxY - minY;
+        const area = width * height;
+
+        if (area < minArea) {
+            minArea = area;
+            bestOBB = { width, height, area, angle };
         }
     }
-    return newPts;
+    return bestOBB;
 }
 
 /**
- * Splits a polygon by a segment with a gap.
- * @param {Array} points - Polygon points
- * @param {Object} p1 - Start of segment
- * @param {Object} p2 - End of segment
- * @param {Number} gap - Gap width
+ * Splits a polygon by a general line defined by two points, with an optional gap.
+ * @param {Array<{x: number, y: number}>} points - The vertices of the polygon.
+ * @param {{x: number, y: number}} p1 - Start point of the splitting line.
+ * @param {{x: number, y: number}} p2 - End point of the splitting line.
+ * @param {number} gap - The width of the gap between the resulting polygons.
+ * @returns {Array<Array<{x: number, y: number}>>} - Two resulting polygons (as point arrays).
  */
-export function splitPolygonGeneral(points, p1, p2, gap) {
+export function splitPolygonGeneral(points, p1, p2, gap = 0) {
+    const halfGap = gap / 2;
     const dx = p2.x - p1.x;
     const dy = p2.y - p1.y;
     const len = Math.hypot(dx, dy);
     if (len < 1e-6) return [points, []];
 
-    const ux = dx / len;
-    const uy = dy / len;
-    const nx = -uy;
-    const ny = ux;
+    const ux = dx / len, uy = dy / len;
+    const nx = -uy, ny = ux;
 
+    // Helper to clip polygon by a line
+    function clipByLine(pts, lp1, lp2, side) {
+        const newPts = [];
+        const ldx = lp2.x - lp1.x, ldy = lp2.y - lp1.y;
+        for (let i = 0; i < pts.length; i++) {
+            const curr = pts[i];
+            const prev = pts[(i - 1 + pts.length) % pts.length];
+
+            // Cross product to find side: (x - x1)(y2 - y1) - (y - y1)(x2 - x1)
+            const currSide = (curr.x - lp1.x) * ldy - (curr.y - lp1.y) * ldx;
+            const prevSide = (prev.x - lp1.x) * ldy - (prev.y - lp1.y) * ldx;
+
+            const currIn = (side > 0) ? currSide >= -1e-6 : currSide <= 1e-6;
+            const prevIn = (side > 0) ? prevSide >= -1e-6 : prevSide <= 1e-6;
+
+            if (currIn) {
+                if (!prevIn) {
+                    const inter = getLineIntersection(prev, curr, lp1, lp2);
+                    if (inter) newPts.push(inter);
+                }
+                newPts.push(curr);
+            } else if (prevIn) {
+                const inter = getLineIntersection(prev, curr, lp1, lp2);
+                if (inter) newPts.push(inter);
+            }
+        }
+        return newPts;
+    }
+
+    const line1P1 = { x: p1.x + nx * halfGap, y: p1.y + ny * halfGap };
+    const line1P2 = { x: p2.x + nx * halfGap, y: p2.y + ny * halfGap };
+    const line2P1 = { x: p1.x - nx * halfGap, y: p1.y - ny * halfGap };
+    const line2P2 = { x: p2.x - nx * halfGap, y: p2.y - ny * halfGap };
+
+    const sub1 = clipByLine(points, line1P1, line1P2, 1);
+    const sub2 = clipByLine(points, line2P1, line2P2, -1);
+
+    // If clipping failed or produced invalid results, return the original or empty
+    return [sub1.length >= 3 ? sub1 : [], sub2.length >= 3 ? sub2 : []];
+}
+
+/**
+ * Gets the axis-aligned bounding box of a set of points.
+ */
+export function getBounds(points) {
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    points.forEach(p => {
+        if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+    });
+    return { minX, maxX, minY, maxY };
+}
+
+/**
+ * Splits a polygon by an axis-aligned line with a gap.
+ */
+export function splitPolygon(points, isVert, mid, gap) {
     const halfGap = gap / 2;
-    const l1_p1 = { x: p1.x + nx * halfGap, y: p1.y + ny * halfGap };
-    const l1_p2 = { x: p2.x + nx * halfGap, y: p2.y + ny * halfGap };
-    const l2_p1 = { x: p1.x - nx * halfGap, y: p1.y - ny * halfGap };
-    const l2_p2 = { x: p2.x - nx * halfGap, y: p2.y - ny * halfGap };
+    const limit1 = mid - halfGap;
+    const limit2 = mid + halfGap;
 
-    const sub1 = clipPolygon(points, l1_p1, l1_p2, 1);
-    const sub2 = clipPolygon(points, l2_p1, l2_p2, -1);
+    function clip(polyPoints, sign, limit) {
+        const newPts = [];
+        for (let i = 0; i < polyPoints.length; i++) {
+            const curr = polyPoints[i];
+            const prev = polyPoints[(i - 1 + polyPoints.length) % polyPoints.length];
+            const currVal = isVert ? curr.x : curr.y;
+            const prevVal = isVert ? prev.x : prev.y;
+            const currIn = sign > 0 ? currVal >= limit : currVal <= limit;
+            const prevIn = sign > 0 ? prevVal >= limit : prevVal <= limit;
 
-    return [sub1, sub2];
+            if (currIn) {
+                if (!prevIn) {
+                    const t = (limit - prevVal) / (currVal - prevVal);
+                    newPts.push({ x: prev.x + t * (curr.x - prev.x), y: prev.y + t * (curr.y - prev.y) });
+                }
+                newPts.push(curr);
+            } else if (prevIn) {
+                const t = (limit - prevVal) / (currVal - prevVal);
+                newPts.push({ x: prev.x + t * (curr.x - prev.x), y: prev.y + t * (curr.y - prev.y) });
+            }
+        }
+        return newPts;
+    }
+
+    return [clip(points, -1, limit1), clip(points, 1, limit2)];
 }

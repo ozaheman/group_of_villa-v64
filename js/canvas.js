@@ -1,7 +1,7 @@
 //--- START OF FILE js/canvas.js ---
 
 import { App } from './appState.js';
-import { setMode } from './ui.js';
+import { setMode, updateAreaInfo, clearGeneratedLayout } from './ui.js';
 import { drawPolygonPoint, addVertex, updatePolygonFromHandles } from './polygon.js';
 import { drawRoadPoint, finishRoadDrawing } from './road.js';
 import { handleMeasurement, handleCalibration, placeEntryMarker, updateEntryCircleLabel } from './tools.js';
